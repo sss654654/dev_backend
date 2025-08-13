@@ -26,14 +26,24 @@ docker-build:
   variables:
     DOCKER_TLS_CERTDIR: ""
   before_script:
-    - apk add --no-cache git  # git 설치로 buildx 경고 해결
+    - apk add --no-cache git
+    - echo "=== Debug Information ==="
+    - echo "DOCKERHUB_USERNAME = $DOCKERHUB_USERNAME"
+    - echo "CI_COMMIT_SHORT_SHA = $CI_COMMIT_SHORT_SHA"
+    - ls -la target/ || echo "No target directory found"
+    - ls -la . | head -20
   script:
+    - echo "=== Docker Login ==="
     - echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+    - echo "Login successful"
     - IMAGE="cwave-api"
     - TAG="$CI_COMMIT_SHORT_SHA"
-    - echo "Building image: $DOCKERHUB_USERNAME/$IMAGE:$TAG"
-    - docker build -t "$DOCKERHUB_USERNAME/$IMAGE:$TAG" .
-    - echo "Pushing image: $DOCKERHUB_USERNAME/$IMAGE:$TAG"
+    - echo "=== Building Image ==="
+    - echo "Image name = $DOCKERHUB_USERNAME/$IMAGE:$TAG"
+    - docker build -t "$DOCKERHUB_USERNAME/$IMAGE:$TAG" . --progress=plain
+    - echo "=== Checking Built Images ==="
+    - docker images
+    - echo "=== Pushing Image ==="
     - docker push "$DOCKERHUB_USERNAME/$IMAGE:$TAG"
   needs: 
     - build
