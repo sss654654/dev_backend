@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: user-management-backend
+    
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: password
+    
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+    defer-datasource-initialization: true
+    
+  sql:
+    init:
+      mode: always
+      data-locations: classpath:data.sql
+      
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+logging:
+  level:
+    com.example.usermanagement: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
