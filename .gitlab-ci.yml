@@ -1,8 +1,14 @@
-stages: [ping]
+stages: [build]
 
-ping:
-  stage: ping
-  tags: [cwave]     
-  image: alpine:latest
+build:
+  stage: build
+  tags: [cwave]
+  image: maven:3.9-eclipse-temurin-17
+  cache:
+    paths: [ .m2/repository ]
   script:
-    - echo "Runner OK on $(hostname)"
+    - mvn -v
+    - mvn -B -DskipTests clean package
+  artifacts:
+    paths: [ target/*.jar ]
+    expire_in: 7 days
