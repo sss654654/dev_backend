@@ -24,6 +24,6 @@ docker-build:
     - echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
     - IMAGE="$DOCKERHUB_USERNAME/cwave-api"
     - TAG="$CI_COMMIT_SHORT_SHA"
-    - docker build -t "$IMAGE:$TAG" .
+    - docker build -t "skdudals99/$IMAGE:$TAG" .
     - docker push "skdudals99/$IMAGE:$TAG"
   needs: [build]
