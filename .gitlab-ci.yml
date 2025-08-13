@@ -1,0 +1,8 @@
+stages: [ping]
+
+ping:
+  stage: ping
+  tags: [cwave]     
+  image: alpine:latest
+  script:
+    - echo "Runner OK on $(hostname)"
