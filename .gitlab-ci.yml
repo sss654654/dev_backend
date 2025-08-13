@@ -1,29 +1,39 @@
-stages: [build, docker]
+stages: 
+  - build
+  - docker
 
 default:
-  tags: [cwave]      
+  tags: [cwave]
 
 build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
   cache:
-    paths: [ .m2/repository ]
+    paths: 
+      - .m2/repository
   script:
     - mvn -B -DskipTests clean package
   artifacts:
-    paths: [ target/*.jar ]
+    paths: 
+      - target/*.jar
     expire_in: 7 days
 
 docker-build:
   stage: docker
   image: docker:24.0.5
-  services: [ docker:24.0.5-dind ]
+  services: 
+    - docker:24.0.5-dind
   variables:
     DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache git  # git 설치로 buildx 경고 해결
   script:
     - echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-    - IMAGE="$DOCKERHUB_USERNAME/cwave-api"
+    - IMAGE="cwave-api"
     - TAG="$CI_COMMIT_SHORT_SHA"
-    - docker build -t "skdudals99/$IMAGE:$TAG" .
-    - docker push "skdudals99/$IMAGE:$TAG"
-  needs: [build]
+    - echo "Building image: $DOCKERHUB_USERNAME/$IMAGE:$TAG"
+    - docker build -t "$DOCKERHUB_USERNAME/$IMAGE:$TAG" .
+    - echo "Pushing image: $DOCKERHUB_USERNAME/$IMAGE:$TAG"
+    - docker push "$DOCKERHUB_USERNAME/$IMAGE:$TAG"
+  needs: 
+    - build
