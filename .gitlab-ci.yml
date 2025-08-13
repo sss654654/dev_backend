@@ -11,19 +11,13 @@ stages:
 
 test:
   stage: test
-  image: maven:3.8.6-openjdk-17
-  <<: *cache_maven
+  image: maven:3.9.6-eclipse-temurin-17
   script:
     - mvn -B -Dmaven.test.skip=false test
-  only:
-    - branches
-  except:
-    - tags
 
 package:
   stage: package
-  image: maven:3.8.6-openjdk-17
-  <<: *cache_maven
+  image: maven:3.9.6-eclipse-temurin-17
   script:
     - mvn -B -DskipTests clean package
   artifacts:
