@@ -1,0 +1,71 @@
+stages:
+  - test
+  - package
+  - docker
+
+# 공통 캐시(의존성 빠르게)
+.cache_maven: &cache_maven
+  cache:
+    key: "maven-cache"
+    paths:
+      - .m2/repository
+
+# 1) 테스트
+test:
+  stage: test
+  image: maven:3.8.6-openjdk-17
+  <<: *cache_maven
+  script:
+    - mvn -B -q -Dmaven.test.skip=false test
+  only:
+    - branches
+  except:
+    - tags
+
+# 2) 패키징 (JAR 산출물 보관)
+package:
+  stage: package
+  image: maven:3.8.6-openjdk-17
+  <<: *cache_maven
+  script:
+    - mvn -B -q -DskipTests clean package
+  artifacts:
+    when: on_success
+    expire_in: 7 days
+    paths:
+      - target/*.jar
+  needs: ["test"]
+  only:
+    - branches
+  except:
+    - tags
+
+# 3) Docker 이미지 빌드 & 푸시
+docker-build:
+  stage: docker
+  image: docker:25
+  services:
+    - name: docker:25-dind
+      command: ["--tls=false"]   # 간단하게 TLS 비활성
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""       # dind TLS 미사용
+    IMAGE_NAME: $CI_REGISTRY_IMAGE/cwave-api
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  before_script:
+    # GitLab Container Registry 로그인 (CI_JOB_TOKEN 사용)
+    - echo "Login to $CI_REGISTRY"
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY || docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+  script:
+    - docker build -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" .
+    - docker push "$IMAGE_NAME:$IMAGE_TAG"
+    # 기본 브랜치(main)일 때만 latest 푸시
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        docker push "$IMAGE_NAME:latest"
+      fi
+  needs: ["package"]
+  rules:
+    # 머지 리퀘스트/브랜치 푸시에서 동작
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
