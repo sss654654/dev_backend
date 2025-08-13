@@ -13,6 +13,8 @@ build:
       - .m2/repository
   script:
     - mvn -B -DskipTests clean package
+    - ls -al
+    - ls -al target
   artifacts:
     paths: 
       - target/*.jar
