@@ -42,7 +42,8 @@ docker-build:
     - TAG="$CI_COMMIT_SHORT_SHA"
     - echo "=== Building Image ==="
     - echo "Image name = $DOCKERHUB_USERNAME/$IMAGE:$TAG"
-    - docker build -t "$DOCKERHUB_USERNAME/$IMAGE:$TAG" . --progress=plain
+    - docker buildx create --use
+    - docker buildx build --platform linux/arm/v7,linux/arm64/v8,linux/amd64 --tag "$DOCKERHUB_USERNAME/$IMAGE:$TAG" .
     - echo "=== Checking Built Images ==="
     - docker images
     - echo "=== Pushing Image ==="
