@@ -1,20 +1,25 @@
 spring:
   application:
     name: user-management-backend
-    
+  config:
+    import: optional:file:.env[.properties]
   datasource:
-    url: jdbc:h2:mem:testdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: password
-    
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-      
+    write:
+      name: write
+      jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      username: ${USERNAME}
+      password: ${PASSWORD}
+    read:
+      name: read
+      jdbc-url: jdbc:mysql://${READ_URL}:${READ_PORT}/${DB}
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      username: ${USERNAME}
+      password: ${PASSWORD}
+
+
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.MySQL8Dialect
     hibernate:
       ddl-auto: create-drop
     show-sql: true
@@ -28,7 +33,9 @@ spring:
     init:
       mode: always
       data-locations: classpath:data.sql
-      
+
+
+
 server:
   port: 8080
   servlet:
