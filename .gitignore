@@ -1,6 +1,6 @@
 # Created by https://www.toptal.com/developers/gitignore/api/macos,windows,java,git,maven
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,windows,java,git,maven
-
+.env*
 ### Git ###
 # Created by git for backups. To disable backups in Git:
 # $ git config --global mergetool.keepBackup false
@@ -123,4 +123,3 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/macos,windows,java,git,maven
 
 
-.env*
