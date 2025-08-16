@@ -36,17 +36,19 @@ docker-build:
     - ls -la . | head -20
   script:
     - echo "=== Docker Login ==="
-    - echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+    - aws ecr get-login-password --region $DEV_REGION | docker login --username AWS --password-stdin $ECR_NAMESPACE
     - echo "Login successful"
-    - IMAGE="cwave-api"
+
     - TAG="$CI_COMMIT_SHORT_SHA"
     - echo "=== Building Image ==="
-    - echo "Image name = $DOCKERHUB_USERNAME/$IMAGE:$TAG"
+    - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$TAG"
     - docker buildx create --use
-    - docker buildx build --platform linux/arm/v7,linux/arm64/v8,linux/amd64 --tag "$DOCKERHUB_USERNAME/$IMAGE:$TAG" .
+    - docker buildx build --platform linux/arm/v7,linux/arm64/v8,linux/amd64 --tag "$ECR_NAMESPACE/$ECR_REPO:$TAG" .
+
     - echo "=== Checking Built Images ==="
     - docker images
+    
     - echo "=== Pushing Image ==="
-    - docker push "$DOCKERHUB_USERNAME/$IMAGE:$TAG"
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:$TAG"
   needs: 
     - build
