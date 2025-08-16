@@ -1,6 +1,12 @@
 stages: 
   - build
+  - login
   - docker
+  - notify
+
+variables:
+  SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
+  PROJECT_NAME: "CGV API"
 
 default:
   tags: [cwave]
@@ -14,6 +20,7 @@ build:
   script:
     - mvn -B -DskipTests clean package
     - ls -al
+    - echo $DEV_REGION
     - ls -al target
   artifacts:
     paths: 
@@ -21,16 +28,18 @@ build:
     expire_in: 1 hour
 
 ecr-login:
-  stage: docker
+  stage: login
   image: 
     name: amazon/aws-cli:latest
     entrypoint: [""]
   script:
     - echo "=== Getting ECR Login Token ==="
+    - echo $DEV_REGION
     - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
   artifacts:
     paths:
       - ecr_token.txt
+      - target/*.jar
     expire_in: 1 hour
 
 docker-build-separate:
@@ -38,6 +47,11 @@ docker-build-separate:
   image: docker:24.0.5
   services: 
     - docker:24.0.5-dind
+  needs:
+    - job: build
+      artifacts: true
+    - job: ecr-login
+      artifacts: true
   dependencies:
     - ecr-login
   before_script:
@@ -53,9 +67,35 @@ docker-build-separate:
     - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$TAG"
     
     # 멀티 플랫폼 빌드 및 푸시 (한 번에)
-    - docker buildx build 
-        --platform linux/arm/v7,linux/arm64/v8,linux/amd64 
-        --tag "$ECR_NAMESPACE/$ECR_REPO:$TAG" 
-        --push .
+    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$TAG" .
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:$TAG"
     
     - echo "=== Complete ==="
+
+# 성공 알림
+notify-success:
+  stage: notify
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - |
+      curl -X POST -H 'Content-type: application/json' \
+      --data "{\"text\": \"✅ GitLab CI completed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
+      $SLACK_WEBHOOK_URL
+  rules:
+    - when: on_success
+
+# 실패 알림  
+notify-failure:
+  stage: notify
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - |
+      curl -X POST -H 'Content-type: application/json' \
+      --data "{\"text\": \"❌ GitLab CI failed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
+      $SLACK_WEBHOOK_URL
+  rules:
+    - when: on_failure
