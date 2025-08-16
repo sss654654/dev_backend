@@ -18,37 +18,47 @@ build:
   artifacts:
     paths: 
       - target/*.jar
-    expire_in: 7 days
+    expire_in: 1 hour
 
-docker-build:
+ecr-login:
+  stage: docker
+  image: amazon/aws-cli:latest
+  script:
+    - echo "=== Getting ECR Login Token ==="
+    - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
+  artifacts:
+    paths:
+      - ecr_token.txt
+    expire_in: 10 minutes
+  tags:
+    - docker
+
+docker-build-separate:
   stage: docker
   image: docker:24.0.5
   services: 
     - docker:24.0.5-dind
-  variables:
-    DOCKER_TLS_CERTDIR: ""
+  dependencies:
+    - ecr-login
   before_script:
-    - apk add --no-cache git
-    - echo "=== Debug Information ==="
-    - echo "DOCKERHUB_USERNAME = $DOCKERHUB_USERNAME"
-    - echo "CI_COMMIT_SHORT_SHA = $CI_COMMIT_SHORT_SHA"
-    - ls -la target/ || echo "No target directory found"
-    - ls -la . | head -20
+    # Docker buildx 설정
+    - docker buildx create --use
   script:
     - echo "=== Docker Login ==="
-    - aws ecr get-login-password --region $DEV_REGION | docker login --username AWS --password-stdin $ECR_NAMESPACE
+    - cat ecr_token.txt | docker login --username AWS --password-stdin $ECR_NAMESPACE
     - echo "Login successful"
 
     - TAG="$CI_COMMIT_SHORT_SHA"
-    - echo "=== Building Image ==="
+    - echo "=== Building and Pushing Image ==="
     - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$TAG"
-    - docker buildx create --use
-    - docker buildx build --platform linux/arm/v7,linux/arm64/v8,linux/amd64 --tag "$ECR_NAMESPACE/$ECR_REPO:$TAG" .
-
-    - echo "=== Checking Built Images ==="
-    - docker images
     
-    - echo "=== Pushing Image ==="
-    - docker push "$ECR_NAMESPACE/$ECR_REPO:$TAG"
-  needs: 
-    - build
+    # 멀티 플랫폼 빌드 및 푸시 (한 번에)
+    - docker buildx build 
+        --platform linux/arm/v7,linux/arm64/v8,linux/amd64 
+        --tag "$ECR_NAMESPACE/$ECR_REPO:$TAG" 
+        --push .
+    
+    - echo "=== Complete ==="
+  tags:
+    - docker
+    - dind
