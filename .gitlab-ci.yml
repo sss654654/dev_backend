@@ -30,8 +30,6 @@ ecr-login:
     paths:
       - ecr_token.txt
     expire_in: 10 minutes
-  tags:
-    - docker
 
 docker-build-separate:
   stage: docker
@@ -59,6 +57,3 @@ docker-build-separate:
         --push .
     
     - echo "=== Complete ==="
-  tags:
-    - docker
-    - dind
