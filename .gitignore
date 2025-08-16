@@ -1,6 +1,9 @@
-# Created by https://www.toptal.com/developers/gitignore/api/macos,windows,java,git,maven
-# Edit at https://www.toptal.com/developers/gitignore?templates=macos,windows,java,git,maven
-.env*
+# Created by https://www.toptal.com/developers/gitignore/api/macos,windows,git,visualstudiocode,dotenv,java,maven
+# Edit at https://www.toptal.com/developers/gitignore?templates=macos,windows,git,visualstudiocode,dotenv,java,maven
+
+### dotenv ###
+.env
+
 ### Git ###
 # Created by git for backups. To disable backups in Git:
 # $ git config --global mergetool.keepBackup false
@@ -94,6 +97,25 @@ buildNumber.properties
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
 
+### VisualStudioCode ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local History for Visual Studio Code
+.history/
+
+# Built Visual Studio Code Extensions
+*.vsix
+
+### VisualStudioCode Patch ###
+# Ignore all local history of files
+.history
+.ionide
+
 ### Windows ###
 # Windows thumbnail cache files
 Thumbs.db
@@ -120,6 +142,4 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# End of https://www.toptal.com/developers/gitignore/api/macos,windows,java,git,maven
-
-
+# End of https://www.toptal.com/developers/gitignore/api/macos,windows,git,visualstudiocode,dotenv,java,maven
