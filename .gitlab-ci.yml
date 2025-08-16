@@ -22,7 +22,9 @@ build:
 
 ecr-login:
   stage: docker
-  image: amazon/aws-cli:latest
+  image: 
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
   script:
     - echo "=== Getting ECR Login Token ==="
     - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
