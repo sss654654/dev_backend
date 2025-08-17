@@ -1,0 +1,19 @@
+version: '3.8'
+name: cgv
+services:
+  api:
+    build: .
+    container_name: api-dev
+    env_file:
+      - .env.development
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -1,0 +1,45 @@
+version: '3.8'
+name: cgv
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: cgv
+      MYSQL_USER: cgv_user
+      MYSQL_PASSWORD: cgv_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data_dev:/var/lib/mysql
+      - ./src/main/resources/data.sql:/docker-entrypoint-initdb.d/data.sql
+    networks:
+      - cgv-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  api:
+    build: .
+    container_name: api
+    env_file:
+      - .env.local
+    ports:
+      - "8080:8080"
+      - "80:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - cgv-network
+    restart: unless-stopped
+
+volumes:
+  mysql_data_dev:
+
+networks:
+  cgv-network:
+    driver: bridge
