@@ -3,6 +3,9 @@
 
 ### dotenv ###
 .env
+.env.*
+!.env.local
+!.env.example
 
 ### Git ###
 # Created by git for backups. To disable backups in Git:
