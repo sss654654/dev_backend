@@ -68,7 +68,7 @@ docker-build-separate:
     
     # 멀티 플랫폼 빌드 및 푸시 (한 번에)
     - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
-    - docker push myregistry/myapp --all-tags
+    - docker push $ECR_NAMESPACE/$ECR_REPO --all-tags
     
     - echo "=== Complete ==="
 
