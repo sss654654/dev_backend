@@ -3,6 +3,7 @@ spring:
     name: user-management-backend
   config:
     import: optional:file:.env[.properties]
+
   datasource:
     write:
       name: write
@@ -17,6 +18,12 @@ spring:
       username: ${USERNAME}
       password: ${PASSWORD}
 
+  data:                       # ✅ 여기로 이동 (data.redis)
+    redis:
+      host: ${REDIS_HOST:redis}  # docker 서비스명 기본값
+      port: 6379
+      timeout: 2s
+      
 
   jpa:
     database-platform: org.hibernate.dialect.MySQL8Dialect
@@ -28,13 +35,11 @@ spring:
         format_sql: true
         use_sql_comments: true
     defer-datasource-initialization: true
-    
+
   sql:
     init:
       mode: always
       data-locations: classpath:data.sql
-
-
 
 server:
   port: 8080
@@ -48,7 +53,6 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
 
-# Swagger/OpenAPI 설정
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -61,4 +65,3 @@ springdoc:
     display-request-duration: true
   default-consumes-media-type: application/json
   default-produces-media-type: application/json
-
