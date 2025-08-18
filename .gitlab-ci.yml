@@ -67,8 +67,8 @@ docker-build-separate:
     - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$TAG"
     
     # 멀티 플랫폼 빌드 및 푸시 (한 번에)
-    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$TAG" .
-    - docker push "$ECR_NAMESPACE/$ECR_REPO:$TAG"
+    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
+    - docker push myregistry/myapp --all-tags
     
     - echo "=== Complete ==="
 
