@@ -11,6 +11,10 @@ import org.springframework.http.ResponseEntity;
 import java.util.Map;
 
 @RestController
+@CrossOrigin(
+    origins = "*", // 모든 출처 허용
+    methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.OPTIONS} // OPTIONS 메서드를 명시적으로 추가
+)
 @Tag(name = "Queue Management", description = "대기열 관리 API")
 public class QueueController {
 
