@@ -1,9 +1,27 @@
+# Admission Control (대기열 시스템) 관련 설정 추가
+admission:
+  max-active-sessions: 3       # 최대 활성 세션 수 (이제 여기서 관리)
+  session-timeout-seconds: 30  # 활성 세션 유효 시간 (3분 = 180초)
+  kinesis-stream-name: "cgv-admissions-stream" # Kinesis 스트림 이름
+
+# 
+# 
+
+
 spring:
+  profiles:
+    active: local
+  
+  # [추가] Redis 접속 정보
+  data:
+    redis:
+      host: redis # docker-compose.yml에 정의된 Redis 서비스 이름
+      port: 6379
+
   application:
     name: user-management-backend
   config:
     import: optional:file:.env[.properties]
-
   datasource:
     write:
       name: write
@@ -18,13 +36,6 @@ spring:
       username: ${USERNAME}
       password: ${PASSWORD}
 
-  data:                       # ✅ 여기로 이동 (data.redis)
-    redis:
-      host: ${REDIS_HOST:redis}  # docker 서비스명 기본값
-      port: 6379
-      timeout: 2s
-      
-
   jpa:
     database-platform: org.hibernate.dialect.MySQL8Dialect
     hibernate:
@@ -35,7 +46,7 @@ spring:
         format_sql: true
         use_sql_comments: true
     defer-datasource-initialization: true
-
+    
   sql:
     init:
       mode: always
@@ -53,6 +64,7 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
 
+# Swagger/OpenAPI 설정
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -60,7 +72,7 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
     enabled: true
-    operationsSorter: method
+    operationsSortzer: method
     tagsSorter: alpha
     display-request-duration: true
   default-consumes-media-type: application/json

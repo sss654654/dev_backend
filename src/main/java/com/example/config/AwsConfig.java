@@ -2,18 +2,35 @@ package com.example.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.kinesis.KinesisClient;
+
+import java.net.URI;
 
 @Configuration
 public class AwsConfig {
 
     @Bean
+    @Profile("!local")
     public KinesisClient kinesisClient() {
-        // AWS SDK가 자동으로 자격 증명(credentials)을 찾도록 설정합니다.
-        // (컨테이너 실행 시 ~/.aws/credentials를 연결했기 때문에 가능)
         return KinesisClient.builder()
-                .region(Region.AP_NORTHEAST_2) // 서울 리전
+                .region(Region.AP_NORTHEAST_2)
+                .build();
+    }
+
+    @Bean
+    @Profile("local")
+    public KinesisClient localKinesisClient() {
+        return KinesisClient.builder()
+                .region(Region.AP_NORTHEAST_2)
+                .endpointOverride(URI.create("http://localstack:4566"))
+                // [수정] 아래 두 줄을 AnonymousCredentialsProvider 대신 사용합니다.
+                .credentialsProvider(
+                    StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test"))
+                )
                 .build();
     }
 }
