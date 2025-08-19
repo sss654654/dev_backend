@@ -1,11 +1,11 @@
 package com.example.couponmanagement.dto;
 
 public class RequestCoupon {
-    private String userId;
+    private String requestId;
     public RequestCoupon(){}
-    public String getUserId(){
-        return userId;
+    public String getRequestId(){
+        return requestId;
     }
-    public void setUserId(String userId) { this.userId = userId; }
+    public void setRequestId(String requestId) { this.requestId = requestId; }
 
 }

@@ -12,4 +12,5 @@ elif [ $ENV = "prod" ] ; then
 else
   echo "========= Run Local ========="
   docker-compose up -d --build
+
 fi
