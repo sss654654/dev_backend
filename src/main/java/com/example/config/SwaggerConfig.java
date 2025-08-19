@@ -27,7 +27,8 @@ public class SwaggerConfig {
                         new Server().url("http://localhost:8080").description("Local Development Server"),
                         new Server().url("https://api.example.com").description("Production Server")))
                 .tags(List.of(
-                        new Tag().name("User Management").description("사용자 관리 API"),
+                        new Tag().name("User Management").description("영화 관리 API"),
+                        new Tag().name("Movie Management").description("사용자 관리 API"),
                         new Tag().name("Health Check").description("헬스체크 API")));
     }
 }

@@ -1,0 +1,110 @@
+<!-- src/main/resources/static/wait.html -->
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8"/>
+    <title>대기 중</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 40px; }
+        .card { border: 1px solid #eee; border-radius: 12px; padding: 20px; max-width: 520px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+        .big { font-size: 40px; font-weight: 800; margin: 8px 0; }
+        .muted { color: #777; }
+        .ok { color: #0b7; font-weight: 700; }
+        .err { color: #c33; font-weight: 700; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="muted">요청 ID</div>
+    <div id="rid" class="muted"></div>
+
+    <div class="muted" style="margin-top:16px;">현재 남은 순번</div>
+    <div id="position" class="big">-</div>
+
+    <div class="muted">상태</div>
+    <div id="status">연결 중...</div>
+    <div id="done" style="display:none;margin-top:16px;" class="ok">처리가 완료되었습니다! 🎉</div>
+    <div id="error" style="display:none;margin-top:16px;" class="err">연결이 불안정합니다. 잠시 후 재시도합니다…</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+<script>
+    const requestId = new URL(location.href).searchParams.get('requestId') || '';
+    document.getElementById('rid').innerText = requestId || '(없음)';
+
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws-stomp';
+    console.log('[WAIT] wsUrl =', wsUrl, 'requestId =', requestId);
+
+    let client = null;
+    let sub = null;
+    let retry = 0;
+    let closing = false;
+
+    const setStatus = (t) => { document.getElementById('status').innerText = t; console.log('[WAIT] status =', t); };
+    const setPos    = (n) => { document.getElementById('position').innerText = String(n ?? '-'); console.log('[WAIT] position =', n); };
+    const showDone  = () => { document.getElementById('done').style.display = 'block'; console.log('[WAIT] DONE!'); };
+    const showErr   = (v) => { document.getElementById('error').style.display = v ? 'block' : 'none'; if (v) console.warn('[WAIT] show error banner'); };
+
+    function connect() {
+        if (!requestId) { setStatus('요청 ID가 없습니다.'); return; }
+
+        const raw = new WebSocket(wsUrl);
+        raw.onopen = () => console.log('[WS] raw WebSocket OPEN');
+        raw.onclose = (ev) => console.warn('[WS] raw WebSocket CLOSE', ev.code, ev.reason);
+        raw.onerror = (ev) => console.error('[WS] raw WebSocket ERROR', ev);
+
+        client = Stomp.over(raw);
+        client.debug = (msg) => console.log('[STOMP]', msg);
+        client.heartbeat.outgoing = 10000;
+        client.heartbeat.incoming = 10000;
+
+        console.log('[WAIT] Try STOMP connect...');
+        client.connect({}, () => {
+            retry = 0; showErr(false); setStatus('대기 중...');
+            const topic = `/topic/wait/${requestId}`;
+            console.log('[WAIT] CONNECTED. Subscribe to', topic);
+
+            sub = client.subscribe(topic, (msg) => {
+                console.log('[WAIT] MSG RECEIVED:', msg.body);
+                try {
+                    const data = JSON.parse(msg.body);
+                    setPos(data.position);
+                    setStatus(data.status || '대기 중...');
+                    if (data.status === 'COMPLETE' || data.position === 0) {
+                        showDone();
+                    }
+                } catch (e) {
+                    console.error('메시지 파싱 실패:', e);
+                }
+            });
+        }, (err) => {
+            if (closing) return;
+            console.error('[STOMP] CONNECT ERROR:', err);
+            showErr(true);
+            setStatus('웹소켓 재연결 중...');
+            const delay = Math.min(1500 * Math.pow(1.6, retry++), 15000);
+            setTimeout(connect, delay);
+        });
+    }
+
+    window.addEventListener('beforeunload', () => {
+        closing = true;
+        try { sub && sub.unsubscribe(); } catch {}
+        try { client && client.disconnect(() => console.log('[STOMP] disconnected'), {}); } catch {}
+    });
+
+    // 5초 동안 메시지가 전혀 안 오면 서버 디버그 REST로 현재 포지션 확인(선택)
+    setTimeout(() => {
+        if (document.getElementById('position').innerText === '-') {
+            fetch('/api/debug/wait/' + encodeURIComponent(requestId))
+                .then(r => r.ok ? r.text() : Promise.reject(r.status))
+                .then(t => console.log('[WAIT] DEBUG current position from REST =', t))
+                .catch(e => console.warn('[WAIT] DEBUG REST failed', e));
+        }
+    }, 5000);
+
+    connect();
+</script>
+</body>
+</html>

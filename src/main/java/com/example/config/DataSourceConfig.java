@@ -1,4 +1,4 @@
-package com.example.usermanagement.db;
+package com.example.config;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.annotation.Qualifier;
