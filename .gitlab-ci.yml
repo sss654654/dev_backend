@@ -54,15 +54,11 @@ docker-build-separate:
       artifacts: true
   dependencies:
     - ecr-login
-  before_script:
-    # Docker buildx 설정
-    - docker buildx create --use
   script:
     - echo "=== Docker Login ==="
     - cat ecr_token.txt | docker login --username AWS --password-stdin $ECR_NAMESPACE
     - echo "Login successful"
 
-    - TAG="$CI_COMMIT_SHORT_SHA"
     - echo "=== Building and Pushing Image ==="
     - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$TAG"
     
@@ -72,6 +68,15 @@ docker-build-separate:
     - docker push $ECR_NAMESPACE/$ECR_REPO:latest
     
     - echo "=== Complete ==="
+  rules:
+    - if: $CI_COMMIT_REF_NAME == "main"
+      variables:
+        ECR_REPO: dev-gitlab-repo
+        TAG: $CI_COMMIT_SHORT_SHA
+    - if: $CI_COMMIT_REF_NAME == "production"
+      variables:
+        ECR_REPO: prod-cgv-api
+        TAG: $(date +%Y%m%d-%H%M%S)
 
 # 성공 알림
 notify-success:
