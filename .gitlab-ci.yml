@@ -61,6 +61,7 @@ docker-build-separate:
     - echo "Login successful"
 
     - echo "=== Building and Pushing Image ==="
+    - TAG=$(date +%Y%m%d-%H%M%S)
     - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
     
     # 멀티 플랫폼 빌드 및 푸시 (한 번에)
