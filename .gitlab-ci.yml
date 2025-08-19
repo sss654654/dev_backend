@@ -7,6 +7,7 @@ stages:
 variables:
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
   PROJECT_NAME: "CGV API"
+  VER: "1.0.0"
 
 default:
   tags: [cwave]
@@ -60,11 +61,11 @@ docker-build-separate:
     - echo "Login successful"
 
     - echo "=== Building and Pushing Image ==="
-    - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$TAG"
+    - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
     
     # 멀티 플랫폼 빌드 및 푸시 (한 번에)
-    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
-    - docker push $ECR_NAMESPACE/$ECR_REPO:$TAG
+    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
+    - docker push $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
     - docker push $ECR_NAMESPACE/$ECR_REPO:latest
     
     - echo "=== Complete ==="
