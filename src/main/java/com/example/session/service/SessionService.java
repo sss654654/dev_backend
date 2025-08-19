@@ -1,4 +1,4 @@
-// src/main/java/com/example/couponmanagement/session/SessionService.java
+
 package com.example.session.service;
 
 import jakarta.servlet.http.Cookie;
@@ -17,8 +17,10 @@ import java.util.Optional;
 
 import static org.springframework.http.HttpStatus.*;
 
+
 @Service
 public class SessionService {
+
 
     public static final String COOKIE_NAME = "SID";
     private static final String KEY_PREFIX = "sess:";
@@ -85,3 +87,4 @@ public class SessionService {
         return sid;
     }
 }
+

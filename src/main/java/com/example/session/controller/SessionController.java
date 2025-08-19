@@ -14,7 +14,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -23,9 +22,11 @@ public class SessionController {
     private final SessionService sessionService;
     private static final String COOKIE_NAME = "SID";
 
+
     SessionController(SessionService sessionService){
         this.sessionService = sessionService;
     }
+
     @Operation(summary = "세션 ID 발급", description = "사용자 구분을 위한 고유 세션 ID를 발급합니다.")
     @ApiResponse(responseCode = "200", description = "성공",
             content = @Content(schema = @Schema(type = "object", example = "{\"sessionId\": \"a1b2c3d4-e5f6-7890-1234-567890abcdef\"}")))
@@ -52,5 +53,6 @@ public class SessionController {
                 .noContent()
                 .header(HttpHeaders.SET_COOKIE, cookie.toString())
                 .build();
+
     }
 }
