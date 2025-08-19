@@ -25,9 +25,8 @@ public class AdmissionService {
 
     private final RedisTemplate<String, String> redisTemplate;
     private ZSetOperations<String, String> zSetOps;
-    private SetOperations<String, String> setOps;
+    private SetOperations<String, String> setOps; // ACTIVE_MOVIE_QUEUES_KEY는 Set으로 유지
 
-    // 변경점: SimpMessagingTemplate 의존성 완전 제거
     public AdmissionService(RedisTemplate<String, String> redisTemplate) {
         this.redisTemplate = redisTemplate;
     }
@@ -44,20 +43,17 @@ public class AdmissionService {
         
         logger.info("[MovieID: {}] [RequestID: {}] 입장 시도: sessionId={}", movieId, requestId, sessionId);
 
-        if (setOps.isMember(activeSessionsKey, sessionId)) {
-            logger.warn("[MovieID: {}] [RequestID: {}] 이미 활성 세션에 있는 사용자입니다: sessionId={}", movieId, requestId, sessionId);
+        if (this.isActiveUser(sessionId, movieId)) {
+            logger.warn("[MovieID: {}] ... 이미 활성 세션에 있는 사용자입니다...", movieId, requestId, sessionId);
             return AdmissionResult.SUCCESS;
         }
         if (zSetOps.rank(waitingQueueKey, sessionId) != null) {
             zSetOps.remove(waitingQueueKey, sessionId);
-            logger.warn("[MovieID: {}] [RequestID: {}] 이미 대기열에 있는 사용자를 발견하여, 기존 위치에서 제거 후 맨 뒤로 보냅니다: sessionId={}", movieId, requestId, sessionId);
+            logger.warn("[MovieID: {}] ... 이미 대기열에 있는 사용자 발견, 맨 뒤로 보냅니다...", movieId, requestId, sessionId);
         }
 
-        Long currentActiveCount = setOps.size(activeSessionsKey);
-        if (currentActiveCount == null) currentActiveCount = 0L;
-
-        if (currentActiveCount < this.maxActiveSessions) {
-            setOps.add(activeSessionsKey, sessionId);
+        if (this.getVacantSlots(movieId) > 0) {
+            this.addToActiveSessions(movieId, sessionId); // 변경: 이제 시간도 함께 기록
             logger.info("[MovieID: {}] [RequestID: {}] 즉시 입장 성공: sessionId={}", movieId, requestId, sessionId);
             return AdmissionResult.SUCCESS;
         } else {
@@ -70,20 +66,20 @@ public class AdmissionService {
     
     public void leave(String sessionId, String requestId, String movieId) {
         String activeSessionsKey = ACTIVE_SESSIONS_KEY_PREFIX + movieId;
-        Long removedCount = setOps.remove(activeSessionsKey, sessionId);
+        // 변경점: Sorted Set에서 제거
+        Long removedCount = zSetOps.remove(activeSessionsKey, sessionId);
 
-        // 변경점: 브로드캐스트 관련 로직 완전 제거
         if (removedCount != null && removedCount > 0) {
             logger.info("[MovieID: {}] [RequestID: {}] 세션 이탈: sessionId={}. 빈자리 발생.", movieId, requestId, sessionId);
         }
     }
     
-    // 변경점: 빈자리를 계산하는 로직을 Service 내부에 캡슐화하여 제공
     public long getVacantSlots(String movieId) {
         long activeCount = getActiveSessionCount(movieId);
-        long vacantCount = maxActiveSessions - activeCount;
-        return Math.max(0, vacantCount); // 0보다 작은 값이 나오지 않도록 보장
+        return Math.max(0, maxActiveSessions - activeCount);
     }
+    
+    // --- (이하 메서드들도 Sorted Set 기준으로 변경) ---
 
     public Long getUserRank(String sessionId, String movieId) {
         String waitingQueueKey = WAITING_QUEUE_KEY_PREFIX + movieId;
@@ -92,7 +88,8 @@ public class AdmissionService {
     
     public boolean isActiveUser(String sessionId, String movieId) {
         String activeSessionsKey = ACTIVE_SESSIONS_KEY_PREFIX + movieId;
-        return setOps.isMember(activeSessionsKey, sessionId);
+        // score가 있다는 것은 멤버가 존재한다는 의미
+        return zSetOps.score(activeSessionsKey, sessionId) != null;
     }
 
     public void removeFromWaitingQueue(String sessionId, String movieId) {
@@ -116,18 +113,19 @@ public class AdmissionService {
     
     public void addToActiveSessions(String movieId, String sessionId) {
         String activeSessionsKey = ACTIVE_SESSIONS_KEY_PREFIX + movieId;
-        setOps.add(activeSessionsKey, sessionId);
+        // Sorted Set에 현재 시간을 score로 하여 추가
+        zSetOps.add(activeSessionsKey, sessionId, System.currentTimeMillis());
     }
 
     public long getActiveSessionCount(String movieId) {
         String activeSessionsKey = ACTIVE_SESSIONS_KEY_PREFIX + movieId;
-        Long count = setOps.size(activeSessionsKey);
+        Long count = zSetOps.zCard(activeSessionsKey); // zCard로 개수 조회
         return count != null ? count : 0;
     }
 
     public Long getTotalWaitingCount(String movieId) {
         String waitingQueueKey = WAITING_QUEUE_KEY_PREFIX + movieId;
-        Long count = zSetOps.size(waitingQueueKey);
+        Long count = zSetOps.zCard(waitingQueueKey);
         return count != null ? count : 0L;
     }
     
