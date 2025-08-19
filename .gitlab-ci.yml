@@ -68,6 +68,8 @@ docker-build-separate:
     - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
     - docker push $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
     - docker push $ECR_NAMESPACE/$ECR_REPO:latest
+
+    - docker image rm $ECR_NAMESPACE/$ECR_REPO:latest $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
     
     - echo "=== Complete ==="
 
