@@ -27,20 +27,8 @@
         <sonar.projectName>cgv-api</sonar.projectName>
         <sonar.qualitygate.wait>true</sonar.qualitygate.wait>
         
-        <!-- 소스 코드 경로 -->
-        <sonar.sources>src/main/java</sonar.sources>
-        <sonar.tests>src/test/java</sonar.tests>
-        
         <!-- 컴파일된 클래스 파일 경로 (Maven 기준) -->
-        <sonar.java.binaries>target/classes</sonar.java.binaries>
-        <sonar.java.test.binaries>target/test-classes</sonar.java.test.binaries>
-        
-        <!-- 라이브러리 경로 -->
-        <sonar.java.libraries>target/dependency/*.jar</sonar.java.libraries>
-        
-        <!-- 제외할 파일/디렉토리 -->
-        <sonar.exclusions>**/target/**,**/node_modules/**</sonar.exclusions>
-        <sonar.test.exclusions>**/target/**</sonar.test.exclusions>
+        <sonar.java.binaries>target/classes/com/example</sonar.java.binaries>
     </properties>
 
     <dependencies>
