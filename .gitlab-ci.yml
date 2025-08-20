@@ -17,6 +17,7 @@ variables:
 default:
   tags: [cwave]
 
+# 정적 분석 (Code Smell..)
 build-sonar:
   stage: build-sonar
 
@@ -35,6 +36,24 @@ build-sonar:
   #   - if: $CI_COMMIT_BRANCH == 'master'
   #   - if: $CI_COMMIT_BRANCH == 'main'
   #   - if: $CI_COMMIT_BRANCH == 'develop'
+
+owasp_dependency_check:
+  image:
+    name: registry.gitlab.com/gitlab-ci-utils/docker-dependency-check:latest
+    entrypoint: [""]
+  stage: test
+  script:
+    # Job will scan the project root folder and fail if any vulnerabilities with CVSS > 0 are found
+    - >
+      /usr/share/dependency-check/bin/dependency-check.sh --scan "./" --format ALL
+      --project "$CI_PROJECT_NAME" --failOnCVSS 0
+  allow_failure: true
+  artifacts:
+    when: always
+    paths:
+        # Save the HTML and JSON report artifacts
+      - "./dependency-check-report.html"
+      - "./dependency-check-report.json"
 
 build:
   stage: build
