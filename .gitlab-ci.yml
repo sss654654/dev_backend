@@ -1,6 +1,6 @@
 stages: 
-  - test
   - build-sonar
+  - build
   - login
   - docker
   - notify
@@ -19,7 +19,7 @@ default:
 
 build-sonar:
   stage: build-sonar
-  
+
   cache:
     policy: pull-push
     key: "sonar-cache-$CI_COMMIT_REF_SLUG"
