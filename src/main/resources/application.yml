@@ -1,21 +1,16 @@
-# Admission Control (대기열 시스템) 관련 설정 추가
+# Admission Control (대기열 시스템) 관련 설정
 admission:
-  max-active-sessions: 1      # 최대 활성 세션 수 (이제 여기서 관리)
-  session-timeout-seconds: 30  # 활성 세션 유효 시간 (3분 = 180초)
-  kinesis-stream-name: "cgv-admissions-stream" # Kinesis 스트림 이름
-
-# 
-# 
-
+  max-active-sessions: 2
+  session-timeout-seconds: 30
+  kinesis-stream-name: "cgv-admissions-stream"
 
 spring:
   profiles:
     active: local
   
-  # [추가] Redis 접속 정보
   data:
     redis:
-      host: redis # docker-compose.yml에 정의된 Redis 서비스 이름
+      host: redis 
       port: 6379
 
   application:
@@ -60,13 +55,11 @@ server:
 logging:
   level:
     com.example.usermanagement: DEBUG
+    com.example.admission.QueueProcessor: WARN
     org.springframework.web: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-    # ---- 아래 라인을 추가하세요 ----
-    com.example.admission.QueueProcessor: INFO
 
-# Swagger/OpenAPI 설정
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -79,3 +72,38 @@ springdoc:
     display-request-duration: true
   default-consumes-media-type: application/json
   default-produces-media-type: application/json
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod # 'prod' 프로파일이 활성화될 때 아래 설정이 적용됩니다.
+  
+  # 데이터베이스 설정: 쿠버네티스 환경변수로부터 값을 읽어옵니다.
+  datasource:
+    write:
+      jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
+      username: ${USERNAME}
+      password: ${PASSWORD} # k8s secret에서 주입될 환경변수
+    read:
+      # 읽기 인스턴스가 없으므로 쓰기 인스턴스를 동일하게 바라보도록 설정합니다.
+      jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
+      username: ${USERNAME}
+      password: ${PASSWORD}
+
+  # 레디스 설정: 쿠버네티스 환경변수로부터 값을 읽어옵니다.
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate # 운영 환경에서는 스키마를 직접 변경하지 않고, 유효성만 검사합니다.
+    show-sql: true
+
+# Admission Control 설정: 쿠버네티스 환경변수로부터 값을 읽어옵니다.
+admission:
+  kinesis-stream-name: ${KINESIS_STREAM_NAME}
+  max-active-sessions: ${MAX_ACTIVE_SESSIONS}
+  session-timeout-seconds: ${SESSION_TIMEOUT_SECONDS}

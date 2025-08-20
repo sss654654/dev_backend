@@ -3,58 +3,55 @@ stages:
   - build
   - login
   - docker
+  - deploy   # ArgoCD를 위한 deploy 단계
   - notify
 
 image: maven:3-eclipse-temurin-17
 
 variables:
-  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
-  GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+  # GitLab CI/CD 변수에서 설정해야 할 값들
+  # ECR_NAMESPACE: "732739477448.dkr.ecr.ap-northeast-2.amazonaws.com"
+  # ECR_REPO: "dev-gitlab-repo"
+  # AWS_DEFAULT_REGION: "ap-northeast-2"
+  
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  GIT_DEPTH: "0"
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
   PROJECT_NAME: "CGV API"
   VER: "1.0.0"
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA # 이미지 태그는 커밋 해시를 사용
 
 default:
   tags: [cwave]
 
-# 정적 분석 (Code Smell..)
+# 1. Test 단계: 정적 분석 및 취약점 점검
 build-sonar:
   stage: test
-
   cache:
     policy: pull-push
     key: "sonar-cache-$CI_COMMIT_REF_SLUG"
     paths:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
-      
   script: 
     - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
   allow_failure: true
-  # rules:
-  #   - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-  #   - if: $CI_COMMIT_BRANCH == 'master'
-  #   - if: $CI_COMMIT_BRANCH == 'main'
-  #   - if: $CI_COMMIT_BRANCH == 'develop'
 
 owasp_dependency_check:
+  stage: test
   image:
     name: registry.gitlab.com/gitlab-ci-utils/docker-dependency-check:latest
     entrypoint: [""]
-  stage: test
   script:
-    # Job will scan the project root folder and fail if any vulnerabilities with CVSS > 0 are found
-    - >
-      /usr/share/dependency-check/bin/dependency-check.sh --scan "./" --format ALL
-      --project "$CI_PROJECT_NAME" --failOnCVSS 0
+    - /usr/share/dependency-check/bin/dependency-check.sh --scan "./" --format ALL --project "$CI_PROJECT_NAME" --failOnCVSS 0
   allow_failure: true
   artifacts:
     when: always
     paths:
-        # Save the HTML and JSON report artifacts
       - "./dependency-check-report.html"
       - "./dependency-check-report.json"
 
+# 2. Build 단계: Maven으로 JAR 파일 빌드
 build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
@@ -63,29 +60,26 @@ build:
       - .m2/repository
   script:
     - mvn -B -DskipTests clean package
-    - ls -al
-    - echo $DEV_REGION
-    - ls -al target
   artifacts:
     paths: 
       - target/*.jar
     expire_in: 1 hour
 
+# 3. Login 단계: ECR 로그인 토큰 생성
 ecr-login:
   stage: login
   image: 
     name: amazon/aws-cli:latest
     entrypoint: [""]
   script:
-    - echo "=== Getting ECR Login Token ==="
-    - echo $DEV_REGION
-    - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
+    - aws ecr get-login-password --region $AWS_DEFAULT_REGION > ecr_token.txt
   artifacts:
     paths:
       - ecr_token.txt
       - target/*.jar
     expire_in: 1 hour
 
+# 4. Docker 단계: Docker 이미지 빌드 및 ECR 푸시
 docker-build-separate:
   stage: docker
   image: docker:24.0.5
@@ -99,24 +93,31 @@ docker-build-separate:
   dependencies:
     - ecr-login
   script:
-    - echo "=== Docker Login ==="
     - cat ecr_token.txt | docker login --username AWS --password-stdin $ECR_NAMESPACE
-    - echo "Login successful"
+    - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$VER-$IMAGE_TAG"
+    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$IMAGE_TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:$VER-$IMAGE_TAG"
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:latest"
 
-    - echo "=== Building and Pushing Image ==="
-    - TAG=$(date +%y%m%d-%H%M%S)
-    - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
-    
-    # 멀티 플랫폼 빌드 및 푸시 (한 번에)
-    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
-    - docker push $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
-    - docker push $ECR_NAMESPACE/$ECR_REPO:latest
+# 5. Deploy 단계: Helm Chart 이미지 태그 업데이트 (ArgoCD 트리거)
+update-helm-chart:
+  stage: deploy
+  image:
+    name: alpine/helm:3.9.0
+    entrypoint: [""]
+  script:
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
+    - git remote set-url origin "https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git checkout $CI_COMMIT_BRANCH
+    - sed -i "s/tag: .*/tag: \"$VER-$IMAGE_TAG\"/" helm/values-dev.yaml
+    - git add helm/values-dev.yaml
+    - git commit -m "ci: Update image tag to $VER-$IMAGE_TAG [skip ci]"
+    - git push origin $CI_COMMIT_BRANCH
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
-    - docker image rm $ECR_NAMESPACE/$ECR_REPO:latest $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
-    
-    - echo "=== Complete ==="
-
-# 성공 알림
+# 6. Notify 단계: 파이프라인 결과 Slack 알림
 notify-success:
   stage: notify
   image: alpine:latest
@@ -130,7 +131,6 @@ notify-success:
   rules:
     - when: on_success
 
-# 실패 알림  
 notify-failure:
   stage: notify
   image: alpine:latest
