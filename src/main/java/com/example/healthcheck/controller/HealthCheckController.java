@@ -43,7 +43,7 @@ public class HealthCheckController {
         return ResponseEntity.status(status).body(response);
     }
     
-    @Operation(summary = "준비상태 체크 (Startup&Readiness Probe)", description = "데이터베이스 연결 등 서비스 준비 상태를 확인합니다")
+    @Operation(summary = "시작&준비상태 체크 (Startup&Readiness Probe)", description = "데이터베이스 연결 등 서비스 준비 상태를 확인합니다")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "서비스 준비 완료",
                     content = @Content(schema = @Schema(implementation = HealthCheckResponse.class))),
