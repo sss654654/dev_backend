@@ -1,64 +1,67 @@
 package com.example.admission;
 
-import com.example.admission.service.AdmissionService;
+import com.example.websockets.LiveUpdateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
+import java.util.Set;
 
 @Component
 public class SessionTimeoutProcessor {
 
     private static final Logger logger = LoggerFactory.getLogger(SessionTimeoutProcessor.class);
-
-    // AdmissionService와 키 접두사를 일치시킵니다.
-    private static final String ACTIVE_USERS_KEY_PREFIX_MOVIE = "active_users:movie:";
-    private static final String ACTIVE_USERS_KEY_COUPON = "active_users:coupon:global";
-
+    
     private final StringRedisTemplate redisTemplate;
+    private final LiveUpdateService liveUpdateService;
 
     @Value("${admission.session-timeout-seconds}")
     private long sessionTimeoutSeconds;
-
-    // 처리해야 할 영화 ID 목록을 스케줄러가 직접 관리합니다.
-    private static final List<String> MOVIE_IDS = List.of("1", "2", "3", "4");
-
-    public SessionTimeoutProcessor(StringRedisTemplate redisTemplate) {
+    
+    public SessionTimeoutProcessor(StringRedisTemplate redisTemplate, LiveUpdateService liveUpdateService) {
         this.redisTemplate = redisTemplate;
+        this.liveUpdateService = liveUpdateService;
     }
 
-    /**
-     * 10초마다 실행하여 만료된 활성 세션을 정리합니다.
-     */
     @Scheduled(fixedRate = 10000)
     public void cleanupExpiredSessions() {
-        if (sessionTimeoutSeconds <= 0) {
-            return; // 타임아웃이 0 이하로 설정되었으면 실행하지 않음
-        }
+        if (sessionTimeoutSeconds <= 0) return;
 
-        // 1. 만료 기준 시간을 계산합니다 (현재 시간 - 타임아웃 시간).
         long expirationTime = System.currentTimeMillis() - (sessionTimeoutSeconds * 1000);
 
-        // 2. 모든 영화 큐에 대해 만료된 세션을 정리합니다.
-        for (String movieId : MOVIE_IDS) {
-            String activeUsersKey = ACTIVE_USERS_KEY_PREFIX_MOVIE + movieId;
+        // --- 변경된 로직 ---
+        // 'active_queues'를 참조하는 대신, 'active_sessions:movie:*' 패턴의 모든 키를 직접 스캔합니다.
+        // 이 방법은 대기열 유무와 상관없이 모든 활성 세션을 안정적으로 정리할 수 있습니다.
+        ScanOptions options = ScanOptions.scanOptions().match("active_sessions:movie:*").count(100).build();
+        
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                String activeSessionsKey = cursor.next();
+                
+                // 1. 만료된 세션들을 먼저 조회합니다. (알림을 보내기 위함)
+                Set<String> expiredMembers = redisTemplate.opsForZSet().rangeByScore(activeSessionsKey, 0, expirationTime);
 
-            // 만료된 시간(score) 이전의 모든 멤버(requestId)를 Redis에서 삭제합니다.
-            Long removedCount = redisTemplate.opsForZSet().removeRangeByScore(activeUsersKey, 0, expirationTime);
+                if (expiredMembers != null && !expiredMembers.isEmpty()) {
+                    // 2. 만료된 세션들을 실제로 삭제합니다.
+                    redisTemplate.opsForZSet().removeRangeByScore(activeSessionsKey, 0, expirationTime);
+                    logger.info("[Key: {}] 만료된 활성 세션 {}개를 정리했습니다.", activeSessionsKey, expiredMembers.size());
 
-            if (removedCount != null && removedCount > 0) {
-                logger.info("[MovieID: {}] 만료된 활성 세션 {}개를 정리했습니다.", movieId, removedCount);
+                    // 3. 삭제된 각 사용자에게 타임아웃 알림을 보냅니다.
+                    for (String member : expiredMembers) {
+                        if (member.contains(":")) {
+                            String requestId = member.split(":")[0];
+                            liveUpdateService.notifyTimeout(requestId);
+                        }
+                    }
+                }
             }
-        }
-
-        // 3. ★★★ 쿠폰 큐에 대해서도 동일하게 만료된 세션을 정리합니다. ★★★
-        Long removedCouponCount = redisTemplate.opsForZSet().removeRangeByScore(ACTIVE_USERS_KEY_COUPON, 0, expirationTime);
-        if (removedCouponCount != null && removedCouponCount > 0) {
-            logger.info("[Coupon] 만료된 활성 세션 {}개를 정리했습니다.", removedCouponCount);
+        } catch (Exception e) {
+            logger.error("만료된 세션 정리 중 오류 발생", e);
         }
     }
 }

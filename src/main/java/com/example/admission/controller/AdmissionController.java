@@ -1,7 +1,9 @@
 package com.example.admission.controller;
 
 import com.example.admission.dto.EnterRequest;
-import com.example.admission.dto.EnterResult;
+import com.example.admission.dto.EnterResponse;
+import com.example.admission.dto.RankResponse;
+import com.example.admission.dto.StatusResponse;
 import com.example.admission.service.AdmissionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,7 +11,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admission")
@@ -23,66 +24,62 @@ public class AdmissionController {
     }
 
     @PostMapping("/enter")
-    public ResponseEntity<String> enter(@RequestBody EnterRequest request) {
-        // 변경점: requestId 유효성 검사 추가
-        if (request.getSessionId() == null || request.getMovieId() == null || request.getRequestId() == null) {
-            return ResponseEntity.badRequest().body("sessionId, movieId, requestId는 필수입니다.");
+    public ResponseEntity<EnterResponse> enter(@RequestBody EnterRequest request) {
+        if (request.getType() == null || request.getId() == null || request.getSessionId() == null) {
+            return ResponseEntity.badRequest().body(new EnterResponse(EnterResponse.Status.FAILED, "type, id, sessionId는 필수입니다.", null, null));
         }
 
-        // 변경점: Service 호출 시 requestId 전달
-        EnterResult result = admissionService.tryEnterMovie(
+        EnterResponse result = admissionService.tryEnter(
+                request.getType(),
+                request.getId(),
                 request.getSessionId(),
-                request.getRequestId(),
-                request.getMovieId()
+                request.getRequestId()
         );
 
-        if (result.getStatus() == EnterResult.Status.SUCCESS) {
-            return ResponseEntity.ok("즉시 입장 처리되었습니다.");
-        } else {
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body("대기열에 등록되었습니다.");
+        if (result.getStatus() == EnterResponse.Status.QUEUED) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
         }
+        
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/leave")
-    public ResponseEntity<String> leave(@RequestBody EnterRequest request) {
-        // 변경점: requestId 유효성 검사 추가 (leave에서는 sessionId와 movieId만으로도 충분할 수 있으나 일관성을 위해 추가)
-        if (request.getSessionId() == null || request.getMovieId() == null) {
-            return ResponseEntity.badRequest().body("sessionId, movieId는 필수입니다.");
+    public ResponseEntity<Void> leave(@RequestBody EnterRequest request) {
+        if (request.getType() == null || request.getId() == null || request.getSessionId() == null || request.getRequestId() == null) {
+            return ResponseEntity.badRequest().build();
         }
-
-        // 변경점: Service 호출 시 requestId 전달 (로깅/추적용)
+        
+        // 수정된 leave 메서드 호출
         admissionService.leave(
+                request.getType(),
+                request.getId(),
                 request.getSessionId(),
-                request.getRequestId(),
-                request.getMovieId()
+                request.getRequestId()
         );
-        return ResponseEntity.ok(request.getSessionId() + " 님이 세션에서 나갔습니다.");
+        return ResponseEntity.ok().build();
     }
 
-    @GetMapping("/rank")
-    public ResponseEntity<Long> getRank(@RequestParam String requestId,
-                                        @RequestParam String movieId) {
-            Long rank = admissionService.getUserRank("movie", movieId, requestId);
-            if (rank != null) {
-            return ResponseEntity.ok(rank + 1);
+    @GetMapping("/{type}/{id}/status")
+    public ResponseEntity<StatusResponse> getStatus(@PathVariable String type, @PathVariable String id) {
+        long activeCount = admissionService.getActiveUserCount(type, id);
+        long waitingCount = admissionService.getTotalWaitingCount(type, id);
+        
+        StatusResponse response = new StatusResponse(type, id, activeCount, waitingCount);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/{type}/{id}/rank")
+    public ResponseEntity<RankResponse> getRank(
+            @PathVariable String type,
+            @PathVariable String id,
+            @RequestParam String requestId) {
+                
+        Long rank = admissionService.getUserRank(type, id, requestId);
+        
+        if (rank != null) {
+            return ResponseEntity.ok(new RankResponse(requestId, rank + 1));
         }
+        
         return ResponseEntity.notFound().build();
-    }
-
-    @GetMapping("/status")
-    public ResponseEntity<Map<String, Long>> getStatus(@RequestParam String movieId) {
-        // ★ "movie" 타입과 movieId를 함께 전달
-        long activeCount = admissionService.getActiveUserCount("movie", movieId);
-        long waitingCount = admissionService.getTotalWaitingCount("movie", movieId);
-
-        return ResponseEntity.ok(Map.of("activeSessions", activeCount, "waitingQueue", waitingCount));
-    }
-    @GetMapping("/status/coupons")
-    public ResponseEntity<Map<String, Long>> getCouponStatus() {
-        // ★ "movie" 타입과 movieId를 함께 전달
-        long activeCount = admissionService.getActiveUserCount("coupon", "global");
-        long waitingCount = admissionService.getTotalWaitingCount("coupon", "global");
-
-        return ResponseEntity.ok(Map.of("activeSessions", activeCount, "waitingQueue", waitingCount));
     }
 }

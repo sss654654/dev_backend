@@ -1,80 +1,52 @@
 package com.example.couponmanagement.controller;
 
-import com.example.admission.dto.EnterResult;
+import com.example.admission.dto.EnterRequest;
+import com.example.admission.dto.EnterResponse;
 import com.example.admission.service.AdmissionService;
-import com.example.couponmanagement.dto.RequestCoupon;
-import com.example.couponmanagement.service.CouponService;
 import com.example.session.service.SessionService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
-
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
 
-import java.net.URI;
 import java.util.Map;
-
-import static org.springframework.http.HttpStatus.UNAUTHORIZED;
-
 
 @RestController
 @RequestMapping("/api/coupons")
-//@CrossOrigin(origins = "*", exposedHeaders = { "Location", "location" })
 @Tag(name = "Coupon Management", description = "쿠폰 관리 API")
 public class CouponController {
-    private final CouponService couponService;
-    private final SessionService sessionService;
     private final AdmissionService admissionService;
-
-    @Autowired
-    public CouponController(CouponService couponService, AdmissionService admissionService, SessionService sessionService) {
-        this.couponService = couponService;
+    private final SessionService sessionService;
+    
+    public CouponController(AdmissionService admissionService, SessionService sessionService) {
         this.admissionService = admissionService;
         this.sessionService = sessionService;
     }
 
     @PostMapping("/request")
-    public ResponseEntity claimAny(@RequestBody RequestCoupon req,
-                                                       HttpServletRequest request) {
-        String requestId = req.getRequestId();
-//        String s3Url = "https://your-s3-bucket-name.s3.ap-northeast-2.amazonaws.com/wait.html?requestId=" + requestId;
-//
-//        // S3 URL로 직접 리다이렉트하라고 브라우저에 명령
-//        return ResponseEntity
-//                .status(303)
-//                .location(URI.create(s3Url))
-//                .build();
-        String waitPath = "/wait.html?requestId=" + req.getRequestId();
+    public ResponseEntity<?> claimAny(@RequestBody EnterRequest req, HttpServletRequest request) {
+        
+        // 쿠키 기반으로 sessionId를 가져오고 유효성 검증
+        String sessionId = sessionService.requireValidSessionOrThrow(request);
 
+        // 범용 tryEnter 메서드 호출
+        // 쿠폰은 종류가 하나이므로 id를 "global"과 같은 고정값으로 사용
+        EnterResponse result = admissionService.tryEnter("coupon", "global", sessionId, req.getRequestId());
 
-        String sessionId = sessionService.readSessionIdFromCookie(request)
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "NO_SESSION_COOKIE"));
-
-
-        if (!sessionService.isSessionValid(sessionId)) {
-            throw new ResponseStatusException(HttpStatusCode.valueOf(419), "SESSION_EXPIRED");
-        }
-        EnterResult result = admissionService.tryEnterCoupon(sessionId, requestId);
-
-        if (result.getStatus() == EnterResult.Status.SUCCESS) {
-            return ResponseEntity.ok("즉시 입장 처리되었습니다. 예매 페이지로 이동합니다.");
-        } else {
-            //QUEUED
-            return ResponseEntity
-                    .accepted()                               // 202 Accepted (비동기 큐에 올림)
-                    .header(HttpHeaders.LOCATION, waitPath)   // 선택: Location도 실어줌
+        if (result.getStatus() == EnterResponse.Status.SUCCESS) {
+            return ResponseEntity.ok(Map.of("status", "SUCCESS", "message", "쿠폰이 즉시 발급되었습니다."));
+        } else if (result.getStatus() == EnterResponse.Status.QUEUED) {
+             return ResponseEntity
+                    .accepted()
+                    .header(HttpHeaders.LOCATION, result.getWaitUrl())
                     .body(Map.of(
-                            "myseq", result.getMySeq(),
-                            "myRank",result.getMyRank(),
-                            "headSeq",result.getHeadSeq(),
-                            "waitUrl", waitPath
+                            "status", "QUEUED",
+                            "waitUrl", result.getWaitUrl(),
+                            "requestId", result.getRequestId()
                     ));
+        } else {
+            return ResponseEntity.badRequest().body(Map.of("status", "FAILED", "message", result.getMessage()));
         }
-
-
     }
 }

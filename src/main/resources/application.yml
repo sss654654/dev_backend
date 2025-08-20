@@ -1,6 +1,6 @@
 # Admission Control (대기열 시스템) 관련 설정 추가
 admission:
-  max-active-sessions: 2      # 최대 활성 세션 수 (이제 여기서 관리)
+  max-active-sessions: 1      # 최대 활성 세션 수 (이제 여기서 관리)
   session-timeout-seconds: 30  # 활성 세션 유효 시간 (3분 = 180초)
   kinesis-stream-name: "cgv-admissions-stream" # Kinesis 스트림 이름
 
@@ -63,6 +63,8 @@ logging:
     org.springframework.web: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    # ---- 아래 라인을 추가하세요 ----
+    com.example.admission.QueueProcessor: INFO
 
 # Swagger/OpenAPI 설정
 springdoc:
