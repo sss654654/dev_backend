@@ -1,5 +1,5 @@
 stages: 
-  - build-sonar
+  - test
   - build
   - login
   - docker
@@ -19,7 +19,7 @@ default:
 
 # 정적 분석 (Code Smell..)
 build-sonar:
-  stage: build-sonar
+  stage: test
 
   cache:
     policy: pull-push
