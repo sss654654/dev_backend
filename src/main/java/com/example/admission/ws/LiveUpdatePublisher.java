@@ -1,14 +1,11 @@
-package com.example.couponmanagement.ws;
+package com.example.admission.ws;
 
 
-import com.example.admission.NotificationConsumer;
-import com.example.couponmanagement.dto.WaitUpdateMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.util.Map;
 
 @Component
@@ -27,15 +24,20 @@ public class LiveUpdatePublisher {
         template.convertAndSend("/topic/stats/", payload);
     }
 
-    /** 1:1 알림: 해당 요청 한 명에게만 (개별 토픽 이용) */
-    public void notifyAdmitted(String requestId) {
+
+    public void broadcastStats(String type, String id, long headSeq, long totalWaiting) {
+        // ★ 1. 어떤 큐에 대한 정보인지 구분하기 위해 동적 토픽 주소를 생성합니다.
+        String destination = String.format("/topic/stats/%s/%s", type, id);
+
         Map<String, Object> payload = Map.of(
-                "requestId", requestId,
-                "status", "ADMITTED",
-                "message", "입장 허가되었습니다. 다음 단계로 진행하세요."
+                "headSeq", headSeq,
+                "totalWaiting", totalWaiting,
+                "ts", System.currentTimeMillis()
         );
-        String destination = "/topic/admit/" + requestId;
+
+        // ★ 2. 해당 큐를 구독하는 클라이언트에게만 메시지를 보냅니다.
         template.convertAndSend(destination, payload);
-        logger.info("==> WebSocket to {}: 입장 알림 전송 완료 <==", destination);
+        logger.info("==> WebSocket Broadcast to {}: headSeq={}, totalWaiting={}", destination, headSeq, totalWaiting);
     }
+
 }

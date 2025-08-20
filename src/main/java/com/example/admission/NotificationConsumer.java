@@ -1,8 +1,8 @@
 package com.example.admission;
 
-
 import com.example.admission.service.AdmissionService;
-import com.example.couponmanagement.ws.LiveUpdatePublisher;
+import com.example.admission.ws.LiveUpdatePublisher;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -26,76 +26,82 @@ public class NotificationConsumer {
     private final AdmissionService admissionService;
     private final LiveUpdatePublisher liveUpdatePublisher;
 
-
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // 변경점 1: application.yml에서 Kinesis 스트림 이름을 주입받도록 설정
     @Value("${admission.kinesis-stream-name}")
     private String streamName;
 
-
-    public NotificationConsumer(KinesisClient kinesisClient, SimpMessagingTemplate messagingTemplate, AdmissionService admissionService,LiveUpdatePublisher liveUpdatePublisher) {
+    public NotificationConsumer(KinesisClient kinesisClient, SimpMessagingTemplate messagingTemplate, AdmissionService admissionService, LiveUpdatePublisher liveUpdatePublisher) {
         this.kinesisClient = kinesisClient;
         this.messagingTemplate = messagingTemplate;
         this.admissionService = admissionService;
         this.liveUpdatePublisher = liveUpdatePublisher;
     }
 
-
     private void handleRecord(String data) {
+        logger.info("CONSUMER RAW DATA RECEIVED FROM KINESIS: {}", data);
         try {
-            // 변경점 3: 단순화된 메시지 형식에 맞게 파싱
-            Map<String, String> message = objectMapper.readValue(data, Map.class);
-            String action = message.get("action");
-            String sessionId = message.get("sessionId");
-            String movieId = message.get("movieId");
+            Map<String, Object> message = objectMapper.readValue(data, new TypeReference<>() {});
+            String action = (String) message.get("action");
 
-            if ("ADMIT".equals(action) && sessionId != null && movieId != null) {
-                logger.info("CONSUMER: Kinesis 이벤트 수신 [MovieID: {}] -> 사용자 {}", movieId, sessionId);
+            if ("ADMIT".equals(action)) {
+                String type = (String) message.get("type");
+                String id = (String) message.get("id");
+                String requestId = (String) message.get("requestId");
+                long admittedSeq = ((Number) message.get("admittedSeq")).longValue();
 
-                // 변경점 4: Redis 상태 변경 로직 제거.
-                // 활성 세션 등록은 Producer(QueueProcessor)의 책임.
+                if (requestId == null) {
+                    logger.warn("Kinesis 메시지에 requestId가 없습니다: {}", data);
+                    return;
+                }
 
-                String destination = "/topic/admit/" + sessionId;
-                Map<String, String> payload = Map.of(
-                    "status", "ADMITTED",
-                    "message", "입장이 허가되었습니다. 예매를 진행해주세요.",
-                    "movieId", movieId
+                logger.info("CONSUMER: Kinesis 이벤트 수신 [{}:{}] -> 사용자 requestId {}", type, id, requestId);
+
+                String destination = "/topic/admit/" + requestId;
+                Map<String, Object> payload = Map.of(
+                        "status", "ADMITTED",
+                        "message", "입장이 허가되었습니다. 예매를 진행해주세요.",
+                        "type", type,
+                        "id", id
                 );
-                
                 messagingTemplate.convertAndSend(destination, payload);
-                logger.info("==> WebSocket to {}: 입장 알림 전송 완료 <==", destination);
+                logger.info("==> WebSocket to {}: 개인 입장 알림 전송 완료", destination);
+
+                long totalWaiting = admissionService.getTotalWaitingCount(type, id);
+                liveUpdatePublisher.broadcastStats(type, id, admittedSeq, totalWaiting);
             }
         } catch (Exception e) {
             logger.error("Kinesis 메시지 처리 또는 WebSocket 전송 실패", e);
         }
-
     }
 
     @PostConstruct
     public void startConsuming() {
-        // 이 부분은 Kinesis에서 데이터를 읽어오는 로우레벨 코드이므로 변경할 필요가 없습니다.
-        // handleRecord 메서드의 로직이 중요합니다.
         Thread consumerThread = new Thread(() -> {
             try {
-                // 스트림이 생성될 때까지 잠시 대기 (LocalStack 초기화 시간 고려)
-                Thread.sleep(5000); 
+                Thread.sleep(5000);
 
                 List<Shard> shards = kinesisClient.listShards(b -> b.streamName(streamName)).shards();
                 String shardId = shards.get(0).shardId();
+
+                // ★★★★★ 핵심 수정 부분 ★★★★★
                 final AtomicReference<String> shardIteratorRef = new AtomicReference<>(
-                    kinesisClient.getShardIterator(b -> b.streamName(streamName)
-                        .shardId(shardId).shardIteratorType(ShardIteratorType.LATEST)).shardIterator()
+                        kinesisClient.getShardIterator(b -> b.streamName(streamName)
+                                        .shardId(shardId)
+                                        // LATEST에서 TRIM_HORIZON으로 변경하여 스트림의 처음부터 모든 데이터를 읽도록 설정
+                                        .shardIteratorType(ShardIteratorType.TRIM_HORIZON))
+                                .shardIterator()
                 );
+                // ★★★★★ 여기까지 수정 ★★★★★
 
                 while (!Thread.currentThread().isInterrupted()) {
                     GetRecordsResponse response = kinesisClient.getRecords(b -> b.shardIterator(shardIteratorRef.get()));
-                    
+
                     for (software.amazon.awssdk.services.kinesis.model.Record record : response.records()) {
                         String data = record.data().asUtf8String();
                         handleRecord(data);
                     }
-                    
+
                     shardIteratorRef.set(response.nextShardIterator());
                     Thread.sleep(1000);
                 }
@@ -103,7 +109,8 @@ public class NotificationConsumer {
                 logger.info("Kinesis consumer 스레드가 중단되었습니다.");
                 Thread.currentThread().interrupt();
             } catch (Exception e) {
-                logger.error("Kinesis consumer 에러 발생", e);
+                // 스레드 실행 중 발생하는 예외를 더 상세하게 로깅
+                logger.error("Kinesis consumer 스레드 실행 중 심각한 오류 발생", e);
             }
         });
         consumerThread.setDaemon(true);

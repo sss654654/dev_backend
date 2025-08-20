@@ -1,6 +1,7 @@
 package com.example.admission.controller;
 
 import com.example.admission.dto.EnterRequest;
+import com.example.admission.dto.EnterResult;
 import com.example.admission.service.AdmissionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,13 +30,13 @@ public class AdmissionController {
         }
 
         // 변경점: Service 호출 시 requestId 전달
-        AdmissionService.AdmissionResult result = admissionService.tryEnter(
+        EnterResult result = admissionService.tryEnterMovie(
                 request.getSessionId(),
                 request.getRequestId(),
                 request.getMovieId()
         );
 
-        if (result == AdmissionService.AdmissionResult.SUCCESS) {
+        if (result.getStatus() == EnterResult.Status.SUCCESS) {
             return ResponseEntity.ok("즉시 입장 처리되었습니다.");
         } else {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body("대기열에 등록되었습니다.");
@@ -59,10 +60,10 @@ public class AdmissionController {
     }
 
     @GetMapping("/rank")
-    public ResponseEntity<Long> getRank(@RequestParam String sessionId,
+    public ResponseEntity<Long> getRank(@RequestParam String requestId,
                                         @RequestParam String movieId) {
-        Long rank = admissionService.getUserRank(sessionId, movieId);
-        if (rank != null) {
+            Long rank = admissionService.getUserRank("movie", movieId, requestId);
+            if (rank != null) {
             return ResponseEntity.ok(rank + 1);
         }
         return ResponseEntity.notFound().build();
@@ -70,8 +71,18 @@ public class AdmissionController {
 
     @GetMapping("/status")
     public ResponseEntity<Map<String, Long>> getStatus(@RequestParam String movieId) {
-        long activeCount = admissionService.getActiveSessionCount(movieId);
-        long waitingCount = admissionService.getTotalWaitingCount(movieId);
+        // ★ "movie" 타입과 movieId를 함께 전달
+        long activeCount = admissionService.getActiveUserCount("movie", movieId);
+        long waitingCount = admissionService.getTotalWaitingCount("movie", movieId);
+
+        return ResponseEntity.ok(Map.of("activeSessions", activeCount, "waitingQueue", waitingCount));
+    }
+    @GetMapping("/status/coupons")
+    public ResponseEntity<Map<String, Long>> getCouponStatus() {
+        // ★ "movie" 타입과 movieId를 함께 전달
+        long activeCount = admissionService.getActiveUserCount("coupon", "global");
+        long waitingCount = admissionService.getTotalWaitingCount("coupon", "global");
+
         return ResponseEntity.ok(Map.of("activeSessions", activeCount, "waitingQueue", waitingCount));
     }
 }

@@ -1,5 +1,6 @@
 package com.example.couponmanagement.controller;
 
+import com.example.admission.dto.EnterResult;
 import com.example.admission.service.AdmissionService;
 import com.example.couponmanagement.dto.RequestCoupon;
 import com.example.couponmanagement.service.CouponService;
@@ -36,43 +37,44 @@ public class CouponController {
         this.sessionService = sessionService;
     }
 
-//    @PostMapping("/request")
-//    public ResponseEntity claimAny(@RequestBody RequestCoupon req,
-//                                                       HttpServletRequest request) {
-//        String requestId = couponService.acceptAny(req.getRequestId());
-////        String s3Url = "https://your-s3-bucket-name.s3.ap-northeast-2.amazonaws.com/wait.html?requestId=" + requestId;
-////
-////        // S3 URL로 직접 리다이렉트하라고 브라우저에 명령
-////        return ResponseEntity
-////                .status(303)
-////                .location(URI.create(s3Url))
-////                .build();
-//        String waitPath = "/wait.html?requestId=" + requestId;
+    @PostMapping("/request")
+    public ResponseEntity claimAny(@RequestBody RequestCoupon req,
+                                                       HttpServletRequest request) {
+        String requestId = req.getRequestId();
+//        String s3Url = "https://your-s3-bucket-name.s3.ap-northeast-2.amazonaws.com/wait.html?requestId=" + requestId;
 //
-//
-//        String sessionId = sessionService.readSessionIdFromCookie(request)
-//                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "NO_SESSION_COOKIE"));
-//
-//
-//        if (!sessionService.isSessionValid(sessionId)) {
-//            throw new ResponseStatusException(HttpStatusCode.valueOf(419), "SESSION_EXPIRED");
-//        }
-//        AdmissionService.AdmissionResult result = admissionService.tryEnter(requestId);
-//
-//        if (result == AdmissionService.AdmissionResult.SUCCESS) {
-//            return ResponseEntity.ok("즉시 입장 처리되었습니다. 예매 페이지로 이동합니다.");
-//        } else {
-//            //QUEUED
-//             return ResponseEntity
-//                    .accepted()                               // 202 Accepted (비동기 큐에 올림)
-//                    .header(HttpHeaders.LOCATION, waitPath)   // 선택: Location도 실어줌
-//                    .body(Map.of(
-//                            "myseq", requestId,
-//                            "waitUrl", waitPath
-//                    ));
-//        }
+//        // S3 URL로 직접 리다이렉트하라고 브라우저에 명령
+//        return ResponseEntity
+//                .status(303)
+//                .location(URI.create(s3Url))
+//                .build();
+        String waitPath = "/wait.html?requestId=" + req.getRequestId();
 
 
+        String sessionId = sessionService.readSessionIdFromCookie(request)
+                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "NO_SESSION_COOKIE"));
 
 
+        if (!sessionService.isSessionValid(sessionId)) {
+            throw new ResponseStatusException(HttpStatusCode.valueOf(419), "SESSION_EXPIRED");
+        }
+        EnterResult result = admissionService.tryEnterCoupon(sessionId, requestId);
+
+        if (result.getStatus() == EnterResult.Status.SUCCESS) {
+            return ResponseEntity.ok("즉시 입장 처리되었습니다. 예매 페이지로 이동합니다.");
+        } else {
+            //QUEUED
+            return ResponseEntity
+                    .accepted()                               // 202 Accepted (비동기 큐에 올림)
+                    .header(HttpHeaders.LOCATION, waitPath)   // 선택: Location도 실어줌
+                    .body(Map.of(
+                            "myseq", result.getMySeq(),
+                            "myRank",result.getMyRank(),
+                            "headSeq",result.getHeadSeq(),
+                            "waitUrl", waitPath
+                    ));
+        }
+
+
+    }
 }
