@@ -21,6 +21,11 @@
 
     <properties>
         <java.version>17</java.version>
+
+        <!-- SonarQube -->
+        <sonar.projectKey>iam-root_cgv-api_a3096b07-d04a-4378-9c6e-36ccc5f2d24a</sonar.projectKey>
+        <sonar.projectName>cgv-api</sonar.projectName>
+        <sonar.qualitygate.wait>true</sonar.qualitygate.wait>
     </properties>
 
     <dependencies>

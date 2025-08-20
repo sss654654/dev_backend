@@ -1,16 +1,40 @@
 stages: 
-  - build
+  - test
+  - build-sonar
   - login
   - docker
   - notify
 
+image: maven:3-eclipse-temurin-17
+
 variables:
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+  GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
   PROJECT_NAME: "CGV API"
   VER: "1.0.0"
 
 default:
   tags: [cwave]
+
+build-sonar:
+  stage: build-sonar
+  
+  cache:
+    policy: pull-push
+    key: "sonar-cache-$CI_COMMIT_REF_SLUG"
+    paths:
+      - "${SONAR_USER_HOME}/cache"
+      - sonar-scanner/
+      
+  script: 
+    - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+  allow_failure: true
+  # rules:
+  #   - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  #   - if: $CI_COMMIT_BRANCH == 'master'
+  #   - if: $CI_COMMIT_BRANCH == 'main'
+  #   - if: $CI_COMMIT_BRANCH == 'develop'
 
 build:
   stage: build
