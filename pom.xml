@@ -32,6 +32,11 @@
     </properties>
 
     <dependencies>
+        <!-- IRSA -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+        </dependency>
         <!-- Redis -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
