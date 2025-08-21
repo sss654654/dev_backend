@@ -3,13 +3,14 @@ stages:
   - build
   - login
   - docker
+  - deploy   # ✅ 'deploy' 스테이지 추가
   - notify
 
 image: maven:3-eclipse-temurin-17
 
 variables:
-  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
-  GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  GIT_DEPTH: "0"
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
   PROJECT_NAME: "CGV API"
   VER: "1.0.0"
@@ -17,25 +18,17 @@ variables:
 default:
   tags: [cwave]
 
-# 정적 분석 (Code Smell..)
 build-sonar:
   stage: test
-
   cache:
     policy: pull-push
     key: "sonar-cache-$CI_COMMIT_REF_SLUG"
     paths:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
-      
   script: 
     - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
   allow_failure: true
-  # rules:
-  #   - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-  #   - if: $CI_COMMIT_BRANCH == 'master'
-  #   - if: $CI_COMMIT_BRANCH == 'main'
-  #   - if: $CI_COMMIT_BRANCH == 'develop'
 
 owasp_dependency_check:
   image:
@@ -43,7 +36,6 @@ owasp_dependency_check:
     entrypoint: [""]
   stage: test
   script:
-    # Job will scan the project root folder and fail if any vulnerabilities with CVSS > 0 are found
     - >
       /usr/share/dependency-check/bin/dependency-check.sh --scan "./" --format ALL
       --project "$CI_PROJECT_NAME" --failOnCVSS 0
@@ -51,7 +43,6 @@ owasp_dependency_check:
   artifacts:
     when: always
     paths:
-        # Save the HTML and JSON report artifacts
       - "./dependency-check-report.html"
       - "./dependency-check-report.json"
 
@@ -63,9 +54,6 @@ build:
       - .m2/repository
   script:
     - mvn -B -DskipTests clean package
-    - ls -al
-    - echo $DEV_REGION
-    - ls -al target
   artifacts:
     paths: 
       - target/*.jar
@@ -78,12 +66,10 @@ ecr-login:
     entrypoint: [""]
   script:
     - echo "=== Getting ECR Login Token ==="
-    - echo $DEV_REGION
     - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
   artifacts:
     paths:
       - ecr_token.txt
-      - target/*.jar
     expire_in: 1 hour
 
 docker-build-separate:
@@ -97,25 +83,50 @@ docker-build-separate:
     - job: ecr-login
       artifacts: true
   dependencies:
+    - build
     - ecr-login
   script:
     - echo "=== Docker Login ==="
     - cat ecr_token.txt | docker login --username AWS --password-stdin $ECR_NAMESPACE
     - echo "Login successful"
-
     - echo "=== Building and Pushing Image ==="
-    - TAG=$(date +%y%m%d-%H%M%S)
+    - export TAG=$(date +%y%m%d-%H%M%S)
     - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
-    
-    # 멀티 플랫폼 빌드 및 푸시 (한 번에)
+    - echo "$VER-$TAG" > tag.txt # ✅ 생성된 태그를 파일로 저장해서 다음 단계로 전달
     - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
-    - docker push $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
-    - docker push $ECR_NAMESPACE/$ECR_REPO:latest
-
-    - docker image rm $ECR_NAMESPACE/$ECR_REPO:latest $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG
-    
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:latest"
     - echo "=== Complete ==="
+  artifacts: # ✅ tag.txt 파일을 다음 deploy 단계로 전달하기 위해 artifacts에 추가
+    paths:
+      - tag.txt
+    expire_in: 1 hour
 
+deploy-to-dev:
+  stage: deploy
+  image:
+    name: alpine/k8s:1.28.2
+  needs: # ✅ docker-build-separate 작업이 완료된 후 실행되도록 설정
+    - job: docker-build-separate
+      artifacts: true
+  script:
+    - echo "=== Updating Kubernetes Manifests ==="
+    # 1. Git 사용자 정보 설정
+    - git config --global user.email "gitlab-ci@example.com"
+    - git config --global user.name "GitLab CI Runner"
+    # 2. 이전 단계에서 생성된 태그 읽어오기
+    - export NEW_TAG=$(cat tag.txt)
+    - echo "Applying new tag: $NEW_TAG"
+    # 3. values.yaml 파일의 태그 업데이트 (✅ YAML 문법 오류 수정)
+    - sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values-dev.yaml
+    # 4. 변경된 파일을 Git에 커밋 및 푸시
+    - git add cgv-api-platform/values-dev.yaml
+    - git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
+    # ✅ GitLab에 Push하려면 인증 토큰이 필요합니다.
+    - git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
+  rules:
+    # ✅ main 또는 develop 브랜치일 때만 실행
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "prod"'
 # 성공 알림
 notify-success:
   stage: notify
@@ -143,33 +154,3 @@ notify-failure:
       $SLACK_WEBHOOK_URL
   rules:
     - when: on_failure
-
-deploy-to-dev:
-  stage: deploy # notify 이전, docker 이후에 실행될 새 단계
-  image:
-    name: alpine/k8s:1.28.2 # Git, kubectl, helm 등이 포함된 이미지
-  script:
-    - echo "=== Updating Kubernetes Manifests ==="
-    
-    # 1. Git 설정: 변경사항을 커밋하고 푸시하기 위해 사용자 정보를 설정합니다.
-    - git config --global user.email "gitlab-ci@example.com"
-    - git config --global user.name "GitLab CI"
-    
-    # 2. 배포 정보가 있는 Git 리포지토리 클론 (현재 리포지와 배포 리포지가 다른 경우)
-    # 만약 같은 리포지토리라면 이 부분은 생략 가능합니다.
-    # - git clone https://oauth2:${GIT_TOKEN}@gitlab.com/your-group/your-manifests-repo.git
-    # - cd your-manifests-repo
-
-    # 3. 새로운 이미지 태그 생성 및 values.yaml 파일 업데이트
-    - NEW_TAG="$VER-$(date +%y%m%d-%H%M%S)"
-    - > # Helm 차트의 values.yaml 파일 경로를 실제 경로로 수정해야 합니다.
-      sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values-dev.yaml
-    
-    # 4. 변경된 values.yaml 파일을 Git에 커밋하고 푸시합니다.
-    - git add cgv-api-platform/values-dev.yaml
-    - git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
-    - git push origin HEAD:$CI_COMMIT_BRANCH
-
-  rules:
-    # main 또는 develop 브랜치에 푸시될 때만 이 deploy 단계를 실행합니다.
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"'
