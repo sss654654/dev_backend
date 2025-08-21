@@ -110,8 +110,9 @@ deploy-to-dev:
       artifacts: true
   script:
     - |
+      pwd && ls -la
       git config --global user.email "gitlab-ci@example.com"
-      git config --global user.name "GitLab CI Runner"
+      git config --global user.name "subin"
       export NEW_TAG=$(cat tag.txt)
       echo "Applying new tag: $NEW_TAG"
       sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" values-dev.yaml
