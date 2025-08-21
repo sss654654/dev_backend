@@ -118,7 +118,7 @@ deploy-to-dev:
     - export NEW_TAG=$(cat tag.txt)
     - echo "Applying new tag: $NEW_TAG"
     # 3. values.yaml 파일의 태그 업데이트 (✅ YAML 문법 오류 수정)
-    - sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values-dev.yaml
+    - 'sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values.yaml'
     # 4. 변경된 파일을 Git에 커밋 및 푸시
     - git add cgv-api-platform/values-dev.yaml
     - git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
