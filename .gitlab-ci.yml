@@ -112,12 +112,12 @@ deploy-to-dev:
     - git config --global user.name "GitLab CI Runner"
     - export NEW_TAG=$(cat tag.txt)
     - echo "Applying new tag: $NEW_TAG"
-    - sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values.yaml
-    - git add cgv-api-platform/values.yaml
+    - sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values-dev.yaml
+    - git add cgv-api-platform/values-dev.yaml
     - git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
     - git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "production"'
 
 notify-success:
   stage: notify
