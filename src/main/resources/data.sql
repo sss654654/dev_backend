@@ -6,6 +6,37 @@
 DROP TABLE IF EXISTS showtimes;
 DROP TABLE IF EXISTS movies;
 
+-- 기존 movies, showtimes 테이블 생성 구문 아래에 추가
+
+-- 쿠폰 테이블 생성
+DROP TABLE IF EXISTS user_coupons;
+DROP TABLE IF EXISTS coupon;
+
+CREATE TABLE coupon (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    total_quantity INT,
+    remaining_quantity INT,
+    starts_at DATETIME,
+    expires_at DATETIME,
+    version BIGINT
+);
+
+-- 사용자별 쿠폰 발급 내역 테이블 생성
+CREATE TABLE user_coupons (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    coupon_id BIGINT NOT NULL,
+    code VARCHAR(64) NOT NULL,
+    issued_at DATETIME,
+    request_id VARCHAR(64),
+    UNIQUE KEY uk_user_coupon (user_id, coupon_id)
+);
+
+-- 샘플 쿠폰 데이터 (필요 시)
+-- INSERT INTO coupon (name, total_quantity, remaining_quantity, starts_at, expires_at, version) 
+-- VALUES ('CGV 2000원 할인 쿠폰', 4500000, 4500000, '2025-08-01 00:00:00', '2025-12-31 23:59:59', 0);
+
 CREATE TABLE movies (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     movie_id VARCHAR(255) NOT NULL UNIQUE,
