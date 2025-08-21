@@ -1,4 +1,4 @@
-stages: 
+stages:
   - test
   - build
   - login
@@ -16,7 +16,8 @@ variables:
   VER: "1.0.0"
 
 default:
-  tags: [cwave]
+  tags: 
+    - cwave
 
 build-sonar:
   stage: test
@@ -26,7 +27,7 @@ build-sonar:
     paths:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
-  script: 
+  script:
     - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
   allow_failure: true
 
@@ -50,18 +51,18 @@ build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
   cache:
-    paths: 
+    paths:
       - .m2/repository
   script:
     - mvn -B -DskipTests clean package
   artifacts:
-    paths: 
+    paths:
       - target/*.jar
     expire_in: 1 hour
 
 ecr-login:
   stage: login
-  image: 
+  image:
     name: amazon/aws-cli:latest
     entrypoint: [""]
   script:
@@ -75,7 +76,7 @@ ecr-login:
 docker-build-separate:
   stage: docker
   image: docker:24.0.5
-  services: 
+  services:
     - docker:24.0.5-dind
   needs:
     - job: build
