@@ -11,6 +11,6 @@ elif [ $1 = "prod" ] ; then
   docker compose -f docker-compose.prod.yml up -d --build
 else
   echo "========= Run Local ========="
-  docker compose up -d --build
+  sudo docker-compose up -d --build
 
 fi
