@@ -96,6 +96,8 @@ spring:
     redis:
       host: ${REDIS_HOST}
       port: ${REDIS_PORT}
+      ssl:
+        enabled: true # Redis 연결 시 SSL/TLS 암호화를 사용하도록 설정
 
   jpa:
     hibernate:
