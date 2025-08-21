@@ -13,26 +13,21 @@ import javax.sql.DataSource;
 public class JpaConfig {
 
     /**
-     * JPA의 EntityManagerFactory를 직접 설정합니다.
-     * @DependsOn("flywayInitializer") 어노테이션을 통해
-     * Spring Boot가 'flywayInitializer'라는 Bean(Flyway 마이그레이션을 실제 수행하는 Bean)을
-     * 먼저 완료시킨 후에 이 Bean을 생성하도록 강제합니다.
-     *
-     * @param dataSource 데이터 소스
-     * @param builder EntityManagerFactoryBuilder
-     * @param jpaProperties JPA 속성
-     * @return LocalContainerEntityManagerFactoryBean
+     * @DependsOn("flyway") 어노테이션을 통해
+     * Spring에게 'flyway'라는 이름의 Bean(FlywayConfig에서 만든 Bean)이
+     * 완전히 생성된 후에 이 entityManagerFactory Bean을 생성하도록 강제합니다.
+     * 이로써 순환 참조가 원천적으로 해결됩니다.
      */
     @Bean
-    @DependsOn("flywayInitializer")
+    @DependsOn("flyway")
     public LocalContainerEntityManagerFactoryBean entityManagerFactory(
-            DataSource dataSource,
+            DataSource dataSource, // @Primary로 지정된 최종 DataSource가 주입됩니다.
             EntityManagerFactoryBuilder builder,
             JpaProperties jpaProperties) {
         
         return builder
                 .dataSource(dataSource)
-                .packages("com.example") // 엔티티 클래스가 있는 기본 패키지를 지정합니다.
+                .packages("com.example") // 엔티티 클래스가 있는 패키지
                 .properties(jpaProperties.getProperties())
                 .build();
     }
