@@ -1,35 +1,24 @@
-# Stage 1: Build the application with Gradle
-# Java 17 버전을 명시하여 빌드 환경의 일관성을 보장합니다.
-FROM amazoncorretto:17-alpine-jdk as builder
+#FROM openjdk:17
+#COPY target/*.jar app.jar
+#EXPOSE 8080
+#CMD ["java", "-jar" ,"app.jar"]
+
+# 1. Build Stage: 코드를 컴파일하고 .jar 파일을 만드는 단계
+FROM maven:3.9-eclipse-temurin-17 as builder
 WORKDIR /app
-
-# Gradle 관련 파일들을 먼저 복사하여 종속성 캐싱을 활용합니다.
-COPY gradlew .
-COPY gradle ./gradle
-COPY build.gradle .
-COPY settings.gradle .
-
-# pom.xml이 있다면 Maven 프로젝트이므로 pom.xml을 복사합니다.
-# 사용자님의 프로젝트는 Maven 기반이므로 아래 라인을 사용합니다.
 COPY pom.xml .
-
-# 소스 코드를 복사합니다.
 COPY src ./src
+RUN mvn clean package -DskipTests
 
-# Maven Wrapper를 사용하여 애플리케이션을 빌드합니다.
-RUN ./mvnw package -DskipTests
-
-# Stage 2: Create the final, slim image
-# JRE(Java Runtime Environment)만 포함된 더 가벼운 이미지 사용
-FROM amazoncorretto:17-alpine-jre
+# 2. Run Stage: 빌드된 .jar 파일을 실행하는 단계
+FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 
-# 빌드 스테이지에서 생성된 JAR 파일만 최종 이미지로 복사합니다.
-COPY --from=builder /app/target/*.jar app.jar
-
-# EKS 환경에서 'prod' 프로파일을 사용하도록 환경 변수를 설정합니다.
-# 이 설정에 따라 application.yml 내의 prod 프로파일이 활성화됩니다.
+# ▼▼▼▼▼▼▼▼▼▼ 이 부분이 가장 중요합니다! ▼▼▼▼▼▼▼▼▼▼
+# 컨테이너가 시작될 때 항상 'prod' 프로파일을 사용하도록 환경 변수를 설정합니다.
+# 이 라인을 Build Stage가 아닌, 최종 이미지를 만드는 Run Stage로 옮겼습니다.
 ENV SPRING_PROFILES_ACTIVE=prod
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-# 컨테이너가 시작될 때 실행할 명령
+COPY --from=builder /app/target/*.jar app.jar
 ENTRYPOINT ["java", "-jar", "app.jar"]

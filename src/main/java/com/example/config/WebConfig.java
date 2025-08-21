@@ -10,7 +10,10 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOriginPatterns("*") // 이 라인으로 교체해야 합니다.
+                .allowedOrigins(
+                    "http://localhost:5173", 
+                    "https://cgv.peacemaker.kr" // <--- 바로 이 주소입니다!
+                ) 
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .allowCredentials(true);
