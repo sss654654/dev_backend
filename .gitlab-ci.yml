@@ -110,6 +110,8 @@ deploy-to-dev:
       artifacts: true
   script:
     - |
+      echo "=== Cloning Manifest Repository ==="
+      cd ..
       pwd && ls -la
       git config --global user.email "gitlab-ci@example.com"
       git config --global user.name "subin"
