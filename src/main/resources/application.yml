@@ -1,4 +1,4 @@
-# Admission Control (대기열 시스템) 관련 설정 . 
+# Admission Control (대기열 시스템) 관련 설정 . .
 admission:
   max-active-sessions: 2
   session-timeout-seconds: 30
