@@ -3,7 +3,7 @@ stages:
   - build
   - login
   - docker
-  - deploy   # ✅ 'deploy' 스테이지 추가
+  - deploy
   - notify
 
 image: maven:3-eclipse-temurin-17
@@ -91,43 +91,36 @@ docker-build-separate:
     - echo "Login successful"
     - echo "=== Building and Pushing Image ==="
     - export TAG=$(date +%y%m%d-%H%M%S)
-    - echo "Image name = $ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
-    - echo "$VER-$TAG" > tag.txt # ✅ 생성된 태그를 파일로 저장해서 다음 단계로 전달
+    - echo "$VER-$TAG" > tag.txt
     - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
     - docker push "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
     - docker push "$ECR_NAMESPACE/$ECR_REPO:latest"
     - echo "=== Complete ==="
-  artifacts: # ✅ tag.txt 파일을 다음 deploy 단계로 전달하기 위해 artifacts에 추가
+  artifacts:
     paths:
       - tag.txt
-    expire_in: 1 hour
 
 deploy-to-dev:
   stage: deploy
   image:
     name: alpine/k8s:1.28.2
-  needs: # ✅ docker-build-separate 작업이 완료된 후 실행되도록 설정
+  needs:
     - job: docker-build-separate
       artifacts: true
   script:
     - echo "=== Updating Kubernetes Manifests ==="
-    # 1. Git 사용자 정보 설정
     - git config --global user.email "gitlab-ci@example.com"
-    - git config --global user.name "GitLab CI Runner"
-    # 2. 이전 단계에서 생성된 태그 읽어오기
+    - git config --global user.name "subin"
     - export NEW_TAG=$(cat tag.txt)
     - echo "Applying new tag: $NEW_TAG"
-    # 3. values.yaml 파일의 태그 업데이트 (✅ YAML 문법 오류 수정)
+    # cgv-api-platform/values.yaml 파일의 태그를 업데이트합니다. (파일 경로가 다르면 수정해주세요)
     - 'sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" cgv-api-platform/values.yaml'
-    # 4. 변경된 파일을 Git에 커밋 및 푸시
-    - git add cgv-api-platform/values-dev.yaml
+    - git add cgv-api-platform/values.yaml
     - git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
-    # ✅ GitLab에 Push하려면 인증 토큰이 필요합니다.
     - git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
   rules:
-    # ✅ main 또는 develop 브랜치일 때만 실행
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "prod"'
-# 성공 알림
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"'
+
 notify-success:
   stage: notify
   image: alpine:latest
@@ -141,7 +134,6 @@ notify-success:
   rules:
     - when: on_success
 
-# 실패 알림  
 notify-failure:
   stage: notify
   image: alpine:latest
