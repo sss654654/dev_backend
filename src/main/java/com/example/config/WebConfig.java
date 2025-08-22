@@ -11,8 +11,12 @@ public class WebConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
                 .allowedOrigins(
-                    "http://localhost:5173", 
-                    "https://cgv.peacemaker.kr" // <--- 바로 이 주소입니다!
+                    // S3 버킷 URL (실제 버킷 이름)
+                    "http://prod-iamroot-s3-fe.s3-website.ap-northeast-2.amazonaws.com",
+                    "https://prod-iamroot-s3-fe.s3.ap-northeast-2.amazonaws.com",
+                    // 로컬 개발용
+                    "http://localhost:3000",
+                    "http://localhost:5173",
                 ) 
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
