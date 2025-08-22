@@ -28,7 +28,7 @@
         <!-- AWS SDK 버전을 속성으로 관리 -->
         <aws.sdk.version>2.20.26</aws.sdk.version>
         <!-- Spring Cloud AWS 버전 추가 -->
-        <spring.cloud.aws.version>3.0.1</spring.cloud.aws.version>
+        <spring.cloud.aws.version>3.1.1</spring.cloud.aws.version>
     </properties>
 
     <!-- dependencyManagement: 여러 의존성의 버전을 한곳에서 관리합니다. -->
@@ -64,7 +64,6 @@
         <dependency>
             <groupId>io.awspring.cloud</groupId>
             <artifactId>spring-cloud-aws-starter-kinesis</artifactId>
-            <version>3.1.1</version> 
         </dependency>
         
         <!-- Kinesis SDK -->
@@ -177,6 +176,17 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <repositories>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 
     <build>
         <plugins>
