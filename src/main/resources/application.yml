@@ -1,4 +1,5 @@
-# Admission Control (대기열 시스템) 관련 설정 . .
+
+# Admission Control (대기열 시스템) 관련 설정
 admission:
   max-active-sessions: 2
   session-timeout-seconds: 30
@@ -8,15 +9,35 @@ spring:
   profiles:
     active: local
   
+  # ========== AWS 설정 추가 (중요!) ==========
+  cloud:
+    aws:
+      region:
+        static: ap-northeast-2  # 리전 명시적 설정
+      stack:
+        auto: false  # CloudFormation 스택 자동 감지 비활성화
+      kinesis:
+        enabled: true
+      credentials:
+        instance-profile: true  # IRSA 사용
+        
   data:
     redis:
-      host: redis 
+      host: redis
       port: 6379
+      timeout: 2000ms  # 타임아웃 추가
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
 
   application:
     name: user-management-backend
+    
   config:
     import: optional:file:.env[.properties]
+    
   datasource:
     write:
       name: write
@@ -24,12 +45,18 @@ spring:
       driver-class-name: com.mysql.cj.jdbc.Driver
       username: ${USERNAME}
       password: ${PASSWORD}
+      hikari:
+        maximum-pool-size: 10
+        minimum-idle: 5
     read:
       name: read
       jdbc-url: jdbc:mysql://${READ_URL}:${READ_PORT}/${DB}
       driver-class-name: com.mysql.cj.jdbc.Driver
       username: ${USERNAME}
       password: ${PASSWORD}
+      hikari:
+        maximum-pool-size: 10
+        minimum-idle: 5
 
   jpa:
     database-platform: org.hibernate.dialect.MySQL8Dialect
@@ -41,7 +68,7 @@ spring:
         format_sql: true
         use_sql_comments: true
     defer-datasource-initialization: false
-    
+
   sql:
     init:
       mode: always
@@ -59,6 +86,9 @@ logging:
     org.springframework.web: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    # AWS 관련 로깅 추가
+    software.amazon.awssdk: DEBUG
+    io.awspring.cloud: DEBUG
 
 springdoc:
   api-docs:
@@ -67,7 +97,7 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
     enabled: true
-    operationsSortzer: method
+    operationsSorter: method
     tagsSorter: alpha
     display-request-duration: true
   default-consumes-media-type: application/json
@@ -77,35 +107,75 @@ springdoc:
 spring:
   config:
     activate:
-      on-profile: prod # 'prod' 프로파일이 활성화될 때 아래 설정이 적용됩니다.
-  
-  # 데이터베이스 설정: 쿠버네티스 환경변수로부터 값을 읽어옵니다.
+      on-profile: prod
+
+  # ========== 운영환경 AWS 설정 ==========
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:ap-northeast-2}
+      stack:
+        auto: false
+      kinesis:
+        enabled: true
+        endpoint: https://kinesis.${AWS_REGION:ap-northeast-2}.amazonaws.com
+      credentials:
+        instance-profile: true
+
   datasource:
     write:
       jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
       username: ${USERNAME}
-      password: ${PASSWORD} # k8s secret에서 주입될 환경변수
+      password: ${PASSWORD}
+      hikari:
+        maximum-pool-size: 20
+        minimum-idle: 10
+        connection-timeout: 20000
+        idle-timeout: 300000
+        max-lifetime: 1200000
     read:
-      # 읽기 인스턴스가 없으므로 쓰기 인스턴스를 동일하게 바라보도록 설정합니다.
       jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
       username: ${USERNAME}
       password: ${PASSWORD}
+      hikari:
+        maximum-pool-size: 20
+        minimum-idle: 10
 
-  # 레디스 설정: 쿠버네티스 환경변수로부터 값을 읽어옵니다.
   data:
     redis:
       host: ${REDIS_HOST}
       port: ${REDIS_PORT}
+      timeout: 5000ms
       ssl:
-        enabled: true # Redis 연결 시 SSL/TLS 암호화를 사용하도록 설정
+        enabled: true
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
 
   jpa:
     hibernate:
-      ddl-auto: validate # 운영 환경에서는 스키마를 직접 변경하지 않고, 유효성만 검사합니다.
-    show-sql: true
+      ddl-auto: validate
+    show-sql: false  # 운영환경에서는 SQL 로그 비활성화
 
-# Admission Control 설정: 쿠버네티스 환경변수로부터 값을 읽어옵니다.
+# Admission Control 설정
 admission:
   kinesis-stream-name: ${KINESIS_STREAM_NAME}
   max-active-sessions: ${MAX_ACTIVE_SESSIONS}
   session-timeout-seconds: ${SESSION_TIMEOUT_SECONDS}
+
+
+# 운영환경 로깅 설정
+logging:
+  level:
+      # 기존 로깅 설정 유지하고 추가
+    software.amazon.awssdk: INFO
+    software.amazon.awssdk.request: DEBUG  # AWS API 요청 로그
+    io.awspring.cloud: INFO
+   # root: INFO
+   # com.example.usermanagement: INFO
+   # com.example.admission.QueueProcessor: WARN
+   # software.amazon.awssdk: WARN
+   # io.awspring.cloud: INFO
+    

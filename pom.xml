@@ -27,6 +27,8 @@
         <sonar.java.binaries>target/classes/com/example</sonar.java.binaries>
         <!-- AWS SDK 버전을 속성으로 관리 -->
         <aws.sdk.version>2.20.26</aws.sdk.version>
+        <!-- Spring Cloud AWS 버전 추가 -->
+        <spring.cloud.aws.version>3.0.1</spring.cloud.aws.version>
     </properties>
 
     <!-- dependencyManagement: 여러 의존성의 버전을 한곳에서 관리합니다. -->
@@ -42,19 +44,63 @@
             <dependency>
                 <groupId>io.awspring.cloud</groupId>
                 <artifactId>spring-cloud-aws-dependencies</artifactId>
-                <version>3.0.1</version> <type>pom</type>
+                <version>${spring.cloud.aws.version}</version>
+                <type>pom</type>
                 <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
 
     <dependencies>
+        <!-- ========== AWS & Kinesis 관련 의존성 ========== -->
+        
         <!-- IRSA (STS) -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sts</artifactId>
-            <!-- 버전은 위 dependencyManagement에서 자동으로 관리됩니다. -->
         </dependency>
+        
+        <!-- Spring Cloud AWS Kinesis (추가!) -->
+        <dependency>
+            <groupId>io.awspring.cloud</groupId>
+            <artifactId>spring-cloud-aws-starter-kinesis</artifactId>
+        </dependency>
+        
+        <!-- Kinesis SDK -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kinesis</artifactId>
+        </dependency>
+        
+        <!-- AWS SDK Core 모듈들 (추가!) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>aws-core</artifactId>
+        </dependency>
+        
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>regions</artifactId>
+        </dependency>
+        
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>auth</artifactId>
+        </dependency>
+        
+        <!-- HTTP 클라이언트 (추가!) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+        </dependency>
+        
+        <!-- Apache HTTP Client (대안) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>apache-client</artifactId>
+        </dependency>
+        
+        <!-- ========== 기존 의존성들 ========== -->
         
         <!-- Redis -->
         <dependency>
@@ -72,13 +118,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-websocket</artifactId>
-        </dependency>
-        
-        <!-- Kinesis -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>kinesis</artifactId>
-            <!-- 버전은 위 dependencyManagement에서 자동으로 관리됩니다. -->
         </dependency>
         
         <!-- Spring Boot Web Starter -->
@@ -117,6 +156,17 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>2.2.0</version>
+        </dependency>
+
+        <!-- Jackson for JSON (추가!) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
 
         <!-- Spring Boot Test -->
