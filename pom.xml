@@ -43,7 +43,7 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- ========== AWS 관련 의존성 (최소화) ========== -->
+        <!-- ========== AWS 관련 의존성 ========== -->
         
         <!-- Kinesis SDK -->
         <dependency>
@@ -55,6 +55,23 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sts</artifactId>
+        </dependency>
+        
+        <!-- HTTP Client (Netty) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+        </dependency>
+        
+        <!-- Flyway (DB 마이그레이션) -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
         </dependency>
         
         <!-- ========== Spring Boot 기본 의존성들 ========== -->
