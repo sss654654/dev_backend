@@ -17,7 +17,7 @@ variables:
 default:
   tags: [cwave]
 
-# 정적 분석 (Code Smell..)
+# 정적 분석 
 build-sonar:
   stage: test
   cache:
