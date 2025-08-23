@@ -11,9 +11,8 @@ image: maven:3-eclipse-temurin-17
 variables:
   SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
   GIT_DEPTH: "0"
-
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
-  PROJECT_NAME: "CGV API PROD"
+  PROJECT_NAME: "CGV API"
   VER: "1.0.0"
 
 default:
@@ -28,8 +27,7 @@ build-sonar:
     paths:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
-
-  script: 
+  script:
     - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
   allow_failure: true
 
@@ -49,7 +47,6 @@ owasp_dependency_check:
       - "./dependency-check-report.html"
       - "./dependency-check-report.json"
 
-# 빌드
 build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
@@ -58,16 +55,11 @@ build:
       - .m2/repository
   script:
     - mvn -B -DskipTests clean package
-    - ls -al
-    - echo $PROD_REGION
-    - ls -al target
-
   artifacts:
     paths:
       - target/*.jar
     expire_in: 1 hour
 
-# ECR 로그인
 ecr-login:
   stage: login
   image:
@@ -75,15 +67,13 @@ ecr-login:
     entrypoint: [""]
   script:
     - echo "=== Getting ECR Login Token ==="
-    - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
-
+    - aws ecr get-login-password --region $PROD_REGION > ecr_token.txt
   artifacts:
     paths:
       - ecr_token.txt
     expire_in: 1 hour
 
-# Docker Build & Push
-docker-build-prod:
+docker-build-separate:
   stage: docker
   image: docker:24.0.5
   services:
@@ -97,17 +87,15 @@ docker-build-prod:
     - build
     - ecr-login
   script:
-    - echo "=== Docker Login (PROD) ==="
+    - echo "=== Docker Login ==="
     - cat ecr_token.txt | docker login --username AWS --password-stdin $ECR_NAMESPACE
     - echo "Login successful"
-
     - echo "=== Building and Pushing Image ==="
     - export TAG=$(date +%y%m%d-%H%M%S)
     - echo "$VER-$TAG" > tag.txt
     - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
     - docker push "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
     - docker push "$ECR_NAMESPACE/$ECR_REPO:latest"
-
     - echo "=== Complete ==="
   artifacts:
     paths:
@@ -145,7 +133,7 @@ notify-success:
   script:
     - |
       curl -X POST -H 'Content-type: application/json' \
-      --data "{\"text\": \"✅ [PROD] GitLab CI completed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
+      --data "{\"text\": \"✅ GitLab CI completed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
       $SLACK_WEBHOOK_URL
   rules:
     - when: on_success
@@ -158,7 +146,7 @@ notify-failure:
   script:
     - |
       curl -X POST -H 'Content-type: application/json' \
-      --data "{\"text\": \"❌ [PROD] GitLab CI failed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
+      --data "{\"text\": \"❌ GitLab CI failed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
       $SLACK_WEBHOOK_URL
   rules:
     - when: on_failure
