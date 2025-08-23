@@ -1,52 +1,43 @@
 package com.example.couponmanagement.controller;
 
-import com.example.admission.dto.EnterRequest;
-import com.example.admission.dto.EnterResponse;
 import com.example.admission.service.AdmissionService;
-import com.example.session.service.SessionService;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/coupons")
-@Tag(name = "Coupon Management", description = "쿠폰 관리 API")
 public class CouponController {
+
     private final AdmissionService admissionService;
-    private final SessionService sessionService;
-    
-    public CouponController(AdmissionService admissionService, SessionService sessionService) {
+
+    public CouponController(AdmissionService admissionService) {
         this.admissionService = admissionService;
-        this.sessionService = sessionService;
     }
 
-    @PostMapping("/request")
-    public ResponseEntity<?> claimAny(@RequestBody EnterRequest req, HttpServletRequest request) {
+    @PostMapping("/use")
+    public ResponseEntity<Map<String, Object>> useCoupon(@RequestBody Map<String, String> payload) {
+        String couponCode = payload.get("couponCode");
+        String userId = payload.get("userId");
+
+        if (couponCode == null || userId == null) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "쿠폰 코드와 사용자 ID는 필수입니다."));
+        }
+
+        // --- 쿠폰 사용 로직 시뮬레이션 ---
+        boolean isCouponValid = "DISCOUNT2000".equals(couponCode);
         
-        // 쿠키 기반으로 sessionId를 가져오고 유효성 검증
-        String sessionId = sessionService.requireValidSessionOrThrow(request);
-
-        // 범용 tryEnter 메서드 호출
-        // 쿠폰은 종류가 하나이므로 id를 "global"과 같은 고정값으로 사용
-        EnterResponse result = admissionService.tryEnter("coupon", "global", sessionId, req.getRequestId());
-
-        if (result.getStatus() == EnterResponse.Status.SUCCESS) {
-            return ResponseEntity.ok(Map.of("status", "SUCCESS", "message", "쿠폰이 즉시 발급되었습니다."));
-        } else if (result.getStatus() == EnterResponse.Status.QUEUED) {
-             return ResponseEntity
-                    .accepted()
-                    .header(HttpHeaders.LOCATION, result.getWaitUrl())
-                    .body(Map.of(
-                            "status", "QUEUED",
-                            "waitUrl", result.getWaitUrl(),
-                            "requestId", result.getRequestId()
-                    ));
+        if (isCouponValid) {
+            // ★ 쿠폰 사용 로직이 성공했다고 가정
+            // 대기열 관련 로직은 여기에서 직접 처리하지 않습니다.
+            // 클라이언트는 쿠폰 사용 후, 별도로 대기열 입장 API를 호출해야 합니다.
+            return ResponseEntity.ok(Map.of("success", true, "message", "쿠폰이 성공적으로 적용되었습니다."));
         } else {
-            return ResponseEntity.badRequest().body(Map.of("status", "FAILED", "message", result.getMessage()));
+            return ResponseEntity.status(400).body(Map.of("success", false, "message", "유효하지 않은 쿠폰입니다."));
         }
     }
 }

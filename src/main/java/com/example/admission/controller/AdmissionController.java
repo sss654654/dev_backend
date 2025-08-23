@@ -2,15 +2,12 @@ package com.example.admission.controller;
 
 import com.example.admission.dto.EnterRequest;
 import com.example.admission.dto.EnterResponse;
-import com.example.admission.dto.RankResponse;
-import com.example.admission.dto.StatusResponse;
 import com.example.admission.service.AdmissionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
 
 @RestController
 @RequestMapping("/api/admission")
@@ -25,17 +22,20 @@ public class AdmissionController {
 
     @PostMapping("/enter")
     public ResponseEntity<EnterResponse> enter(@RequestBody EnterRequest request) {
-        if (request.getType() == null || request.getId() == null || request.getSessionId() == null) {
-            return ResponseEntity.badRequest().body(new EnterResponse(EnterResponse.Status.FAILED, "type, id, sessionId는 필수입니다.", null, null));
+        // ★ 요청 파라미터 유효성 검사
+        if (request.getMovieId() == null || request.getMovieId().isBlank()) {
+            // ★ 수정된 EnterResponse 생성자에 맞게 null 추가
+            return ResponseEntity.badRequest().body(new EnterResponse(EnterResponse.Status.FAILED, "movieId는 필수입니다.", null, null, null));
         }
 
         EnterResponse result = admissionService.tryEnter(
-                request.getType(),
-                request.getId(),
+                "movie", // 타입은 'movie'로 고정
+                request.getMovieId(),
                 request.getSessionId(),
                 request.getRequestId()
         );
 
+        // ★ getStatus()를 사용하여 상태 확인
         if (result.getStatus() == EnterResponse.Status.QUEUED) {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
         }
@@ -45,41 +45,16 @@ public class AdmissionController {
 
     @PostMapping("/leave")
     public ResponseEntity<Void> leave(@RequestBody EnterRequest request) {
-        if (request.getType() == null || request.getId() == null || request.getSessionId() == null || request.getRequestId() == null) {
+        if (request.getMovieId() == null || request.getSessionId() == null || request.getRequestId() == null) {
             return ResponseEntity.badRequest().build();
         }
         
-        // 수정된 leave 메서드 호출
         admissionService.leave(
-                request.getType(),
-                request.getId(),
+                "movie",
+                request.getMovieId(),
                 request.getSessionId(),
                 request.getRequestId()
         );
         return ResponseEntity.ok().build();
-    }
-
-    @GetMapping("/{type}/{id}/status")
-    public ResponseEntity<StatusResponse> getStatus(@PathVariable String type, @PathVariable String id) {
-        long activeCount = admissionService.getActiveUserCount(type, id);
-        long waitingCount = admissionService.getTotalWaitingCount(type, id);
-        
-        StatusResponse response = new StatusResponse(type, id, activeCount, waitingCount);
-        return ResponseEntity.ok(response);
-    }
-
-    @GetMapping("/{type}/{id}/rank")
-    public ResponseEntity<RankResponse> getRank(
-            @PathVariable String type,
-            @PathVariable String id,
-            @RequestParam String requestId) {
-                
-        Long rank = admissionService.getUserRank(type, id, requestId);
-        
-        if (rank != null) {
-            return ResponseEntity.ok(new RankResponse(requestId, rank + 1));
-        }
-        
-        return ResponseEntity.notFound().build();
     }
 }
