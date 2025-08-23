@@ -33,62 +33,32 @@ public class QueueProcessor {
             }
 
             for (String movieId : activeMovieIds) {
-                processMovieQueue(type, movieId);
+                // ★★★★★ 역할 축소 ★★★★★
+                // 더 이상 빈자리를 확인하고 입장시키는 로직을 수행하지 않음.
+                // SessionTimeoutProcessor와 신규 진입자가 이 역할을 담당.
+                
+                // 1. 남은 대기자들에게 상태 업데이트
+                long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
+                
+                // 2. 전체 대기자 수 브로드캐스트
+                webSocketUpdateService.broadcastQueueStats(movieId, totalWaiting);
+
+                // 3. 각 대기자에게 자신의 현재 순위 전송
+                updateWaitingUsersRank(type, movieId);
+                
+                // 4. 대기열이 비었으면 활성 큐 목록에서 제거
+                admissionService.removeQueueIfEmpty(type, movieId);
             }
         } catch (Exception e) {
             logger.error("Queue processing 중 전체 오류 발생", e);
         }
     }
     
-    private void processMovieQueue(String type, String movieId) {
-        try {
-            // 1. 빈자리 확인
-            long vacantSlots = admissionService.getVacantSlots(type, movieId);
-
-            if (vacantSlots > 0) {
-                // 2. 빈자리만큼 대기열에서 사용자 추출
-                Map<String, String> admittedUsers = admissionService.popNextUsersFromQueue(type, movieId, vacantSlots);
-
-                if (!admittedUsers.isEmpty()) {
-                    logger.info("[{}:{}] 처리 시작: {}명 입장", type, movieId, admittedUsers.size());
-                    
-                    for (Map.Entry<String, String> entry : admittedUsers.entrySet()) {
-                        String requestId = entry.getKey();
-                        String sessionId = entry.getValue();
-                        
-                        // 3. 활성 세션으로 이동
-                        admissionService.addToActiveSessions(type, movieId, sessionId, requestId);
-                        
-                        // ★ 문제 2 해결: WebSocket으로 직접 입장 허가 알림 전송
-                        webSocketUpdateService.notifyAdmitted(requestId);
-                    }
-                }
-            }
-
-            // 4. 남은 대기자들에게 상태 업데이트
-            long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
-            
-            // ★ 전체 대기자 수 브로드캐스트
-            webSocketUpdateService.broadcastQueueStats(movieId, totalWaiting);
-
-            // ★ 문제 1 해결: 각 대기자에게 자신의 현재 순위 전송
-            updateWaitingUsersRank(type, movieId);
-            
-            // 5. 대기열이 비었으면 활성 큐 목록에서 제거
-            admissionService.removeQueueIfEmpty(type, movieId);
-            
-        } catch (Exception e) {
-            logger.error("Movie queue processing 중 오류: movieId={}", movieId, e);
-        }
-    }
-    
     private void updateWaitingUsersRank(String type, String movieId) {
         try {
-            // Redis에서 requestId를 키로, 순위를 값으로 하는 맵을 가져옴
             Map<String, Long> userRanks = admissionService.getAllUserRanks(type, movieId);
             if (userRanks.isEmpty()) return;
 
-            // 각 사용자에게 순위 정보 전송
             userRanks.forEach((requestId, rank) -> {
                 webSocketUpdateService.notifyRankUpdate(requestId, rank);
             });
