@@ -134,7 +134,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      # [추가] api 서비스가 시작되기 전에 localstack이 먼저 실행되도록 의존성 추가d
+      # [추가] api 서비스가 시작되기 전에 localstack이 먼저 실행되도록 의존성 추가d.
       localstack:
 
         condition: service_started
