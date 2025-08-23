@@ -27,6 +27,8 @@
         <sonar.java.binaries>target/classes/com/example</sonar.java.binaries>
         <!-- AWS SDK 버전 -->
         <aws.sdk.version>2.20.26</aws.sdk.version>
+        <!-- Kubernetes Client 버전 -->
+        <kubernetes-client.version>6.8.1</kubernetes-client.version>
     </properties>
 
     <!-- AWS SDK BOM으로 버전 관리 -->
@@ -43,6 +45,15 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- ========== Kubernetes 관련 의존성 ========== -->
+        
+        <!-- Kubernetes Java Client -->
+        <dependency>
+            <groupId>io.kubernetes</groupId>
+            <artifactId>client-java</artifactId>
+            <version>${kubernetes-client.version}</version>
+        </dependency>
+        
         <!-- ========== AWS 관련 의존성 ========== -->
         
         <!-- Kinesis SDK -->
@@ -81,6 +92,7 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
