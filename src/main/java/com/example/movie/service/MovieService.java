@@ -34,7 +34,7 @@ public class MovieService {
             return movieRepository.findById(id)
                     .map(MovieResponseDto::new);
         } catch (NumberFormatException e) {
-            // Handle cases where the movieId is not a valid number
+            // Handle cases where the movieId is not a valid number.
             return Optional.empty();
         }
     }
