@@ -28,7 +28,7 @@
         <!-- AWS SDK 버전 -->
         <aws.sdk.version>2.20.26</aws.sdk.version>
         <!-- Kubernetes Client 버전 -->
-        <kubernetes-client.version>6.8.1</kubernetes-client.version>
+        <kubernetes-client.version>6.6.1</kubernetes-client.version>  <!-- 더 안정적인 버전 -->
     </properties>
 
     <!-- AWS SDK BOM으로 버전 관리 -->
