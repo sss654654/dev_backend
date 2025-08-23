@@ -1,80 +1,43 @@
 package com.example.couponmanagement.controller;
 
-import com.example.admission.dto.EnterResult;
 import com.example.admission.service.AdmissionService;
-import com.example.couponmanagement.dto.RequestCoupon;
-import com.example.couponmanagement.service.CouponService;
-import com.example.session.service.SessionService;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.net.URI;
 import java.util.Map;
-
-import static org.springframework.http.HttpStatus.UNAUTHORIZED;
-
 
 @RestController
 @RequestMapping("/api/coupons")
-//@CrossOrigin(origins = "*", exposedHeaders = { "Location", "location" })
-@Tag(name = "Coupon Management", description = "쿠폰 관리 API")
 public class CouponController {
-    private final CouponService couponService;
-    private final SessionService sessionService;
+
     private final AdmissionService admissionService;
 
-    @Autowired
-    public CouponController(CouponService couponService, AdmissionService admissionService, SessionService sessionService) {
-        this.couponService = couponService;
+    public CouponController(AdmissionService admissionService) {
         this.admissionService = admissionService;
-        this.sessionService = sessionService;
     }
 
-    @PostMapping("/request")
-    public ResponseEntity claimAny(@RequestBody RequestCoupon req,
-                                                       HttpServletRequest request) {
-        String requestId = req.getRequestId();
-//        String s3Url = "https://your-s3-bucket-name.s3.ap-northeast-2.amazonaws.com/wait.html?requestId=" + requestId;
-//
-//        // S3 URL로 직접 리다이렉트하라고 브라우저에 명령
-//        return ResponseEntity
-//                .status(303)
-//                .location(URI.create(s3Url))
-//                .build();
-        String waitPath = "/wait.html?requestId=" + req.getRequestId();
+    @PostMapping("/use")
+    public ResponseEntity<Map<String, Object>> useCoupon(@RequestBody Map<String, String> payload) {
+        String couponCode = payload.get("couponCode");
+        String userId = payload.get("userId");
 
-
-        String sessionId = sessionService.readSessionIdFromCookie(request)
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "NO_SESSION_COOKIE"));
-
-
-        if (!sessionService.isSessionValid(sessionId)) {
-            throw new ResponseStatusException(HttpStatusCode.valueOf(419), "SESSION_EXPIRED");
+        if (couponCode == null || userId == null) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "쿠폰 코드와 사용자 ID는 필수입니다."));
         }
-        EnterResult result = admissionService.tryEnterCoupon(sessionId, requestId);
 
-        if (result.getStatus() == EnterResult.Status.SUCCESS) {
-            return ResponseEntity.ok("즉시 입장 처리되었습니다. 예매 페이지로 이동합니다.");
+        // --- 쿠폰 사용 로직 시뮬레이션 ---
+        boolean isCouponValid = "DISCOUNT2000".equals(couponCode);
+        
+        if (isCouponValid) {
+            // ★ 쿠폰 사용 로직이 성공했다고 가정
+            // 대기열 관련 로직은 여기에서 직접 처리하지 않습니다.
+            // 클라이언트는 쿠폰 사용 후, 별도로 대기열 입장 API를 호출해야 합니다.
+            return ResponseEntity.ok(Map.of("success", true, "message", "쿠폰이 성공적으로 적용되었습니다."));
         } else {
-            //QUEUED
-            return ResponseEntity
-                    .accepted()                               // 202 Accepted (비동기 큐에 올림)
-                    .header(HttpHeaders.LOCATION, waitPath)   // 선택: Location도 실어줌
-                    .body(Map.of(
-                            "myseq", result.getMySeq(),
-                            "myRank",result.getMyRank(),
-                            "headSeq",result.getHeadSeq(),
-                            "waitUrl", waitPath
-                    ));
+            return ResponseEntity.status(400).body(Map.of("success", false, "message", "유효하지 않은 쿠폰입니다."));
         }
-
-
     }
 }

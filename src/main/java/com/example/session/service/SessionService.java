@@ -1,90 +1,87 @@
-
 package com.example.session.service;
 
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatusCode;
-import org.springframework.http.ResponseCookie;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Optional;
 
-import static org.springframework.http.HttpStatus.*;
-
-
 @Service
 public class SessionService {
 
-
+    private static final Logger logger = LoggerFactory.getLogger(SessionService.class);
     public static final String COOKIE_NAME = "SID";
-    private static final String KEY_PREFIX = "sess:";
+    private static final String KEY_PREFIX = "session:"; // Redis 키 접두사
     private static final Duration SESSION_TTL = Duration.ofHours(1);
 
-    private final StringRedisTemplate redis;
+    private final StringRedisTemplate redisTemplate;
 
-    public SessionService(StringRedisTemplate redis) {
-        this.redis = redis;
+    public SessionService(StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
     }
 
-    /** 세션 생성: Redis에 키 저장(+TTL) */
+    /**
+     * 새로운 세션을 생성하고 Redis에 저장합니다.
+     * @param sessionId 생성할 세션의 ID
+     */
     public void createSession(String sessionId) {
         String key = KEY_PREFIX + sessionId;
-        redis.opsForValue().set(key, "1", SESSION_TTL);
+        redisTemplate.opsForValue().set(key, "1", SESSION_TTL);
+        logger.info("새로운 세션 생성: {}", key);
     }
 
-    /** (선택) 세션 무효화 */
-    public void invalidateSession(String sessionId) {
-        redis.delete(KEY_PREFIX + sessionId);
-    }
-
-    /** 쿠키에서 SID 추출 */
+    /**
+     * HTTP 요청의 쿠키에서 세션 ID를 읽어옵니다.
+     * @param request HttpServletRequest
+     * @return 세션 ID Optional
+     */
     public Optional<String> readSessionIdFromCookie(HttpServletRequest request) {
         Cookie[] cookies = request.getCookies();
-        if (cookies == null) return Optional.empty();
+        if (cookies == null) {
+            return Optional.empty();
+        }
         return Arrays.stream(cookies)
                 .filter(c -> COOKIE_NAME.equals(c.getName()))
                 .map(Cookie::getValue)
                 .findFirst();
     }
 
-    /** Redis에 존재하는 유효 세션인지 확인 (없으면 false) */
+    /**
+     * 주어진 세션 ID가 Redis에 유효하게 존재하는지 확인합니다.
+     * @param sessionId 검증할 세션 ID
+     * @return 유효하면 true
+     */
     public boolean isSessionValid(String sessionId) {
-        return Boolean.TRUE.equals(redis.hasKey(KEY_PREFIX + sessionId));
+        if (sessionId == null || sessionId.isEmpty()) {
+            return false;
+        }
+        return Boolean.TRUE.equals(redisTemplate.hasKey(KEY_PREFIX + sessionId));
     }
 
-    /** 존재/유효 둘 다 검사. 실패 시 401/419 던짐. 성공 시 SID 반환 + TTL 슬라이딩 갱신 */
-    public String requireValidSessionOrThrow(HttpServletRequest request, HttpServletResponse response) {
-        String sid = readSessionIdFromCookie(request)
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "NO_SESSION_COOKIE"));
+    /**
+     * 요청에 유효한 세션 쿠키가 있는지 확인하고, 없으면 예외를 발생시킵니다.
+     * 성공 시 세션 ID를 반환하고, 세션의 만료 시간을 갱신(Sliding TTL)합니다.
+     * @param request HttpServletRequest
+     * @return 유효한 세션 ID
+     */
+    public String requireValidSessionOrThrow(HttpServletRequest request) {
+        String sessionId = readSessionIdFromCookie(request)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "세션 쿠키(SID)가 존재하지 않습니다."));
 
-        String key = KEY_PREFIX + sid;
-        Boolean exists = redis.hasKey(key);
-        if (!Boolean.TRUE.equals(exists)) {
-            throw new ResponseStatusException(HttpStatusCode.valueOf(419), "SESSION_EXPIRED"); // 419: custom timeout
+        if (!isSessionValid(sessionId)) {
+            throw new ResponseStatusException(HttpStatus.valueOf(419), "세션이 만료되었거나 유효하지 않습니다.");
         }
 
-        // 슬라이딩 TTL: Redis TTL 연장
-        redis.expire(key, SESSION_TTL);
+        // 슬라이딩 TTL: 세션 만료 시간 갱신
+        redisTemplate.expire(KEY_PREFIX + sessionId, SESSION_TTL);
 
-        // (선택) 쿠키도 Max-Age 갱신
-        boolean https = request.isSecure();
-        String sameSite = https ? "None" : "Lax";
-        ResponseCookie refreshed = ResponseCookie.from(COOKIE_NAME, sid)
-                .httpOnly(true)
-                .secure(https)
-                .sameSite(sameSite)
-                .path("/")
-                .maxAge(SESSION_TTL)
-                .build();
-        response.addHeader(HttpHeaders.SET_COOKIE, refreshed.toString());
-
-        return sid;
+        return sessionId;
     }
 }
-

@@ -3,14 +3,14 @@ set -e
 
 mvn clean package
 
-if [ $ENV = "dev" ] ; then
+if [ $1 = "dev" ] ; then
   echo "========= Run Development ========="
-  docker-compose -f docker-compose.dev.yml up -d --build
-elif [ $ENV = "prod" ] ; then
+  docker compose -f docker-compose.dev.yml up -d --build
+elif [ $1 = "prod" ] ; then
   echo "========= Run Production ========="
-  docker-compose -f docker-compose.prod.yml up -d --build
+  docker compose -f docker-compose.prod.yml up -d --build
 else
   echo "========= Run Local ========="
-  docker-compose up -d --build
+  sudo docker-compose up -d --build
 
 fi

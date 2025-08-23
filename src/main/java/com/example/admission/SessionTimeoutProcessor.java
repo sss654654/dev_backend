@@ -1,64 +1,102 @@
 package com.example.admission;
 
-import com.example.admission.service.AdmissionService;
+import com.example.admission.service.AdmissionService; // AdmissionService 임포트
+import com.example.admission.ws.WebSocketUpdateService; // WebSocketUpdateService 임포트
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class SessionTimeoutProcessor {
 
     private static final Logger logger = LoggerFactory.getLogger(SessionTimeoutProcessor.class);
-
-    // AdmissionService와 키 접두사를 일치시킵니다.
-    private static final String ACTIVE_USERS_KEY_PREFIX_MOVIE = "active_users:movie:";
-    private static final String ACTIVE_USERS_KEY_COUPON = "active_users:coupon:global";
-
+    
     private final StringRedisTemplate redisTemplate;
+    private final AdmissionService admissionService; // ★ AdmissionService 주입
+    private final WebSocketUpdateService webSocketUpdateService; // ★ WebSocketUpdateService 주입
 
     @Value("${admission.session-timeout-seconds}")
     private long sessionTimeoutSeconds;
 
-    // 처리해야 할 영화 ID 목록을 스케줄러가 직접 관리합니다.
-    private static final List<String> MOVIE_IDS = List.of("1", "2", "3", "4");
-
-    public SessionTimeoutProcessor(StringRedisTemplate redisTemplate) {
+    // ★ 생성자 수정
+    public SessionTimeoutProcessor(StringRedisTemplate redisTemplate, AdmissionService admissionService, WebSocketUpdateService webSocketUpdateService) {
         this.redisTemplate = redisTemplate;
+        this.admissionService = admissionService;
+        this.webSocketUpdateService = webSocketUpdateService;
     }
 
-    /**
-     * 10초마다 실행하여 만료된 활성 세션을 정리합니다.
-     */
-    @Scheduled(fixedRate = 10000)
-    public void cleanupExpiredSessions() {
-        if (sessionTimeoutSeconds <= 0) {
-            return; // 타임아웃이 0 이하로 설정되었으면 실행하지 않음
-        }
+    @Scheduled(fixedRate = 2000) // ★ 주기를 2초로 줄여 더 실시간처럼 동작하게 함
+    public void processExpiredSessionsAndAdmitNext() {
+        if (sessionTimeoutSeconds <= 0) return;
 
-        // 1. 만료 기준 시간을 계산합니다 (현재 시간 - 타임아웃 시간).
         long expirationTime = System.currentTimeMillis() - (sessionTimeoutSeconds * 1000);
+        
+        // 'active_sessions:movie:*' 패턴의 모든 키를 스캔
+        ScanOptions options = ScanOptions.scanOptions().match("active_sessions:movie:*").count(100).build();
+        
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                String activeSessionsKey = cursor.next();
+                String movieId = extractMovieId(activeSessionsKey);
+                if (movieId == null) continue;
 
-        // 2. 모든 영화 큐에 대해 만료된 세션을 정리합니다.
-        for (String movieId : MOVIE_IDS) {
-            String activeUsersKey = ACTIVE_USERS_KEY_PREFIX_MOVIE + movieId;
+                // 1. 만료된 세션들을 조회 및 삭제
+                Set<String> expiredMembers = redisTemplate.opsForZSet().rangeByScore(activeSessionsKey, 0, expirationTime);
+                if (expiredMembers != null && !expiredMembers.isEmpty()) {
+                    redisTemplate.opsForZSet().removeRangeByScore(activeSessionsKey, 0, expirationTime);
+                    logger.info("[{}] 만료된 활성 세션 {}개를 정리했습니다.", activeSessionsKey, expiredMembers.size());
 
-            // 만료된 시간(score) 이전의 모든 멤버(requestId)를 Redis에서 삭제합니다.
-            Long removedCount = redisTemplate.opsForZSet().removeRangeByScore(activeUsersKey, 0, expirationTime);
+                    // 2. 삭제된 각 사용자에게 타임아웃 알림 전송
+                    expiredMembers.forEach(member -> {
+                        if (member.contains(":")) {
+                            String requestId = member.split(":")[0];
+                            // notifyTimeout 메서드가 WebSocketUpdateService에 있다고 가정
+                            // webSocketUpdateService.notifyTimeout(requestId); 
+                        }
+                    });
 
-            if (removedCount != null && removedCount > 0) {
-                logger.info("[MovieID: {}] 만료된 활성 세션 {}개를 정리했습니다.", movieId, removedCount);
+                    // ★★★★★ 핵심 로직 ★★★★★
+                    // 3. 만료된 인원수만큼 대기열에서 다음 사용자 즉시 입장 처리
+                    admitNextUsers(movieId, expiredMembers.size());
+                }
+            }
+        } catch (Exception e) {
+            logger.error("만료된 세션 정리 및 다음 사용자 입장 처리 중 오류 발생", e);
+        }
+    }
+
+    private void admitNextUsers(String movieId, long count) {
+        final String type = "movie";
+        logger.info("[{}:{}] 다음 사용자 입장 처리 시작 ({}명)", type, movieId, count);
+        Map<String, String> admittedUsers = admissionService.popNextUsersFromQueue(type, movieId, count);
+
+        if (!admittedUsers.isEmpty()) {
+            for (Map.Entry<String, String> entry : admittedUsers.entrySet()) {
+                String requestId = entry.getKey();
+                String sessionId = entry.getValue();
+                
+                admissionService.addToActiveSessions(type, movieId, sessionId, requestId);
+                webSocketUpdateService.notifyAdmitted(requestId);
             }
         }
+    }
 
-        // 3. ★★★ 쿠폰 큐에 대해서도 동일하게 만료된 세션을 정리합니다. ★★★
-        Long removedCouponCount = redisTemplate.opsForZSet().removeRangeByScore(ACTIVE_USERS_KEY_COUPON, 0, expirationTime);
-        if (removedCouponCount != null && removedCouponCount > 0) {
-            logger.info("[Coupon] 만료된 활성 세션 {}개를 정리했습니다.", removedCouponCount);
+    private String extractMovieId(String key) {
+        Pattern pattern = Pattern.compile("active_sessions:movie:(.+)");
+        Matcher matcher = pattern.matcher(key);
+        if (matcher.matches()) {
+            return matcher.group(1);
         }
+        return null;
     }
 }

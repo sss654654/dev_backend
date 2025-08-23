@@ -11,7 +11,7 @@ public class Movie {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    @Column(name = "movie_id", nullable = false, unique = true)
     private String movieId;
 
     @Column(nullable = false)
@@ -20,9 +20,15 @@ public class Movie {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    @Column(name = "poster_url")
     private String posterUrl;
+    
+    @Column(name = "age_rating")  // 이 부분 추가!
     private String ageRating;
+    
     private String genre;
+    
+    @Column(name = "duration_in_minutes")  // 이것도 추가!
     private int durationInMinutes;
 
     @OneToMany(mappedBy = "movie", cascade = CascadeType.ALL, fetch = FetchType.EAGER)

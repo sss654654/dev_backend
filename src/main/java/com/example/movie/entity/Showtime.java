@@ -10,6 +10,7 @@ public class Showtime {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "show_time")  // 데이터베이스 컬럼명과 매핑
     private String showTime;
 
     @ManyToOne(fetch = FetchType.LAZY)

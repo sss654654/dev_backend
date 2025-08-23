@@ -1,8 +1,9 @@
-stages: 
+stages:
   - test
   - build
   - login
   - docker
+  - deploy
   - notify
 
 image: maven:3-eclipse-temurin-17
@@ -10,14 +11,15 @@ image: maven:3-eclipse-temurin-17
 variables:
   SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
   GIT_DEPTH: "0"
-  SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/XXXX/XXXX/XXXX"
+
+  SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/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"
   PROJECT_NAME: "CGV API PROD"
   VER: "1.0.0"
 
 default:
-  tags: [cwave]
+  tags: 
+    - cwave
 
-# 정적 분석 
 build-sonar:
   stage: test
   cache:
@@ -26,6 +28,7 @@ build-sonar:
     paths:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
+
   script: 
     - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
   allow_failure: true
@@ -51,39 +54,39 @@ build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
   cache:
-    paths: 
+    paths:
       - .m2/repository
   script:
     - mvn -B -DskipTests clean package
     - ls -al
     - echo $PROD_REGION
     - ls -al target
+
   artifacts:
-    paths: 
+    paths:
       - target/*.jar
     expire_in: 1 hour
 
 # ECR 로그인
 ecr-login:
   stage: login
-  image: 
+  image:
     name: amazon/aws-cli:latest
     entrypoint: [""]
   script:
-    - echo "=== Getting ECR Login Token (PROD) ==="
-    - echo $PROD_REGION
-    - aws ecr get-login-password --region $PROD_REGION > ecr_token.txt
+    - echo "=== Getting ECR Login Token ==="
+    - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
+
   artifacts:
     paths:
       - ecr_token.txt
-      - target/*.jar
     expire_in: 1 hour
 
 # Docker Build & Push
 docker-build-prod:
   stage: docker
   image: docker:24.0.5
-  services: 
+  services:
     - docker:24.0.5-dind
   needs:
     - job: build
@@ -91,25 +94,49 @@ docker-build-prod:
     - job: ecr-login
       artifacts: true
   dependencies:
+    - build
     - ecr-login
   script:
     - echo "=== Docker Login (PROD) ==="
     - cat ecr_token.txt | docker login --username AWS --password-stdin $ECR_NAMESPACE
     - echo "Login successful"
 
-    - echo "=== Building and Pushing Image (PROD) ==="
-    - TAG=$(date +%y%m%d-%H%M%S)
-    - echo "Image name = $ECR_NAMESPACE/$PROD_REPO:$VER-$TAG"
-    
-    - docker build -t "$ECR_NAMESPACE/$PROD_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$PROD_REPO:latest" .
-    - docker push $ECR_NAMESPACE/$PROD_REPO:$VER-$TAG
-    - docker push $ECR_NAMESPACE/$PROD_REPO:latest
+    - echo "=== Building and Pushing Image ==="
+    - export TAG=$(date +%y%m%d-%H%M%S)
+    - echo "$VER-$TAG" > tag.txt
+    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
+    - docker push "$ECR_NAMESPACE/$ECR_REPO:latest"
 
-    - docker image rm $ECR_NAMESPACE/$PROD_REPO:latest $ECR_NAMESPACE/$PROD_REPO:$VER-$TAG
-    
     - echo "=== Complete ==="
+  artifacts:
+    paths:
+      - tag.txt
 
-# 성공 알림
+
+#deploy-to-dev:
+#  stage: deploy
+#  image:
+#    name: alpine/k8s:1.28.2
+ # needs:
+  #  - job: docker-build-separate
+   #   artifacts: true
+#  script:
+#    - |
+#      echo "=== Cloning Manifest Repository ==="
+#      cd ..
+#      pwd && ls -la
+#      git config --global user.email "gitlab-ci@example.com"
+#      git config --global user.name "subin"
+#      export NEW_TAG=$(cat tag.txt)
+#      echo "Applying new tag: $NEW_TAG"
+#      sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" values-dev.yaml
+#      git add values-dev.yaml
+#      git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
+#      git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
+#  rules:
+#    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "production"'
+
 notify-success:
   stage: notify
   image: alpine:latest
@@ -123,7 +150,6 @@ notify-success:
   rules:
     - when: on_success
 
-# 실패 알림  
 notify-failure:
   stage: notify
   image: alpine:latest
