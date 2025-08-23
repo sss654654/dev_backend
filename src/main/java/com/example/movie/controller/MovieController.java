@@ -1,6 +1,6 @@
 package com.example.movie.controller;
 
-import com.example.movie.dto.MovieDto;
+import com.example.movie.dto.MovieResponseDto; // ★ MovieDto -> MovieResponseDto로 변경
 import com.example.movie.service.MovieService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,12 +21,14 @@ public class MovieController {
     }
 
     @GetMapping
-    public ResponseEntity<List<MovieDto>> getAllMovies() {
+    // ★ 반환 타입을 List<MovieResponseDto>로 수정
+    public ResponseEntity<List<MovieResponseDto>> getAllMovies() {
         return ResponseEntity.ok(movieService.getAllMovies());
     }
 
     @GetMapping("/{movieId}")
-    public ResponseEntity<MovieDto> getMovieById(@PathVariable String movieId) {
+    // ★ 반환 타입을 MovieResponseDto로 수정
+    public ResponseEntity<MovieResponseDto> getMovieById(@PathVariable String movieId) {
         return movieService.getMovieById(movieId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
