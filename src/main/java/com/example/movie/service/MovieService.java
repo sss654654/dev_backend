@@ -5,7 +5,7 @@ import com.example.movie.repository.MovieRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
-import java.util.Optional; // ★ Optional 임포트 추가
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -24,10 +24,18 @@ public class MovieService {
                 .collect(Collectors.toList());
     }
 
-    // ★ 누락되었던 getMovieById 메서드 추가
     @Transactional(readOnly = true)
     public Optional<MovieResponseDto> getMovieById(String movieId) {
-        return movieRepository.findById(movieId)
-                .map(MovieResponseDto::new); // 조회된 Movie 엔티티를 DTO로 변환
+        try {
+            // ★ 1. Convert the String movieId to a Long
+            Long id = Long.parseLong(movieId);
+            
+            // ★ 2. Use the converted Long id to find the movie
+            return movieRepository.findById(id)
+                    .map(MovieResponseDto::new);
+        } catch (NumberFormatException e) {
+            // Handle cases where the movieId is not a valid number
+            return Optional.empty();
+        }
     }
 }
