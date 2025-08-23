@@ -1,6 +1,6 @@
 package com.example.admission.service;
 
-import com.example.k8s.service.PodDiscoveryService;
+import com.example.pod.service.PodDiscoveryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

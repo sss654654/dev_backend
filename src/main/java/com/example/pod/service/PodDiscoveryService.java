@@ -1,11 +1,11 @@
-package com.example.k8s.service;
+package com.example.pod.service;
 
-import io.kubernetes.client.openapi.ApiClient;
-import io.kubernetes.client.openapi.ApiException;
-import io.kubernetes.client.openapi.apis.CoreV1Api;
-import io.kubernetes.client.openapi.models.V1Pod;
-import io.kubernetes.client.openapi.models.V1PodList;
-import io.kubernetes.client.util.Config;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodList;
+import io.fabric8.kubernetes.client.Config;
+import io.fabric8.kubernetes.client.ConfigBuilder;
+import io.fabric8.kubernetes.client.DefaultKubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClient;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +13,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -34,7 +33,7 @@ public class PodDiscoveryService {
     @Value("${admission.enable-k8s-discovery:true}")
     private boolean enableK8sDiscovery;
 
-    private CoreV1Api coreV1Api;
+    private KubernetesClient kubernetesClient;
     private final AtomicInteger currentPodCount = new AtomicInteger(1);
     private boolean kubernetesAvailable = false;
 
@@ -47,10 +46,9 @@ public class PodDiscoveryService {
         }
 
         try {
-            // Kubernetes API 클라이언트 초기화
-            ApiClient client = Config.defaultClient();
-            io.kubernetes.client.openapi.Configuration.setDefaultApiClient(client);
-            this.coreV1Api = new CoreV1Api();
+            // Fabric8 Kubernetes Client 초기화
+            Config config = new ConfigBuilder().build();
+            this.kubernetesClient = new DefaultKubernetesClient(config);
             this.kubernetesAvailable = true;
             
             logger.info("Kubernetes API 클라이언트 초기화 성공");
@@ -58,7 +56,7 @@ public class PodDiscoveryService {
             // 초기 Pod 수 조회
             updatePodCount();
             
-        } catch (IOException e) {
+        } catch (Exception e) {
             logger.warn("Kubernetes API 클라이언트 초기화 실패 (로컬 개발환경일 가능성): {}", e.getMessage());
             logger.info("fallback Pod 수({})를 사용합니다.", fallbackPodCount);
             this.kubernetesAvailable = false;
@@ -76,25 +74,16 @@ public class PodDiscoveryService {
         }
 
         try {
-            String labelSelector = "app=" + appName;
-            V1PodList podList = coreV1Api.listNamespacedPod(
-                namespace,
-                null, // pretty
-                null, // allowWatchBookmarks  
-                null, // _continue
-                null, // fieldSelector
-                labelSelector, // labelSelector - 우리 앱의 Pod들만 조회
-                null, // limit
-                null, // resourceVersion
-                null, // resourceVersionMatch
-                null, // sendInitialEvents
-                null, // timeoutSeconds
-                null  // watch
-            );
+            String labelSelector = "app.kubernetes.io/name=" + appName;
+            
+            PodList podList = kubernetesClient.pods()
+                .inNamespace(namespace)
+                .withLabel("app.kubernetes.io/name", appName)
+                .list();
 
             if (podList.getItems() != null) {
                 // Running 상태인 Pod들만 카운트
-                List<V1Pod> runningPods = podList.getItems().stream()
+                List<Pod> runningPods = podList.getItems().stream()
                     .filter(pod -> pod.getStatus() != null && 
                                   "Running".equals(pod.getStatus().getPhase()))
                     .toList();
@@ -111,9 +100,6 @@ public class PodDiscoveryService {
                 }
             }
 
-        } catch (ApiException e) {
-            logger.error("Pod 목록 조회 실패: {} - {}", e.getCode(), e.getResponseBody());
-            // API 호출 실패 시 기존 값 유지
         } catch (Exception e) {
             logger.error("Pod 수 업데이트 중 예외 발생", e);
         }

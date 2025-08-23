@@ -85,7 +85,7 @@ public class AdmissionService {
 
             Long myRank = getUserRank(type, id, requestId);
             
-            return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.", requestId, myRank, null);
+            return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.", requestId, myRank, getTotalWaitingCount(type, id));
         }
     }
 
@@ -156,6 +156,52 @@ public class AdmissionService {
         
         logger.info("대기열에서 {}명을 추출했습니다: {}", result.size(), waitingQueueKey);
         return result;
+    }
+
+    /**
+     * ★★★ 기존 코드에서 필요한 메서드들 추가 ★★★
+     */
+    public void leave(String type, String id, String sessionId, String requestId) {
+        String activeSessionsKey = getActiveSessionsKey(type, id);
+        String waitingQueueKey = getWaitingQueueKey(type, id);
+        String memberToRemove = requestId + ":" + sessionId;
+        
+        zSetOps.remove(activeSessionsKey, memberToRemove);
+        zSetOps.remove(waitingQueueKey, memberToRemove);
+        logger.info("[{}:{}] 세션 이탈: sessionId={}, requestId={}", type, id, sessionId, requestId);
+    }
+
+    public Set<String> getActiveQueues(String type) {
+        return setOps.members(getActiveQueuesKey(type));
+    }
+
+    public long getTotalWaitingCount(String type, String id) {
+        Long count = zSetOps.zCard(getWaitingQueueKey(type, id));
+        return count != null ? count : 0;
+    }
+
+    public void removeQueueIfEmpty(String type, String id) {
+        if (getTotalWaitingCount(type, id) == 0) {
+            setOps.remove(getActiveQueuesKey(type), id);
+        }
+    }
+
+    public Map<String, Long> getAllUserRanks(String type, String id) {
+        String waitingQueueKey = getWaitingQueueKey(type, id);
+        Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
+        if (members == null || members.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        
+        Map<String, Long> userRanks = new HashMap<>();
+        long rank = 1;
+        for (String member : members) {
+            if (member.contains(":")) {
+                String requestId = member.split(":")[0];
+                userRanks.put(requestId, rank++);
+            }
+        }
+        return userRanks;
     }
 
     /**

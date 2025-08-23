@@ -2,7 +2,7 @@ package com.example.admission.controller;
 
 import com.example.admission.service.AdmissionService;
 import com.example.admission.service.DynamicSessionCalculator;
-import com.example.k8s.service.PodDiscoveryService;
+import com.example.pod.service.PodDiscoveryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
@@ -57,6 +57,7 @@ public class AdmissionAdminController {
     @Operation(summary = "영화별 현재 활성 세션 수 조회", description = "특정 영화의 현재 활성 세션 수를 확인합니다")
     @GetMapping("/active-sessions/{movieId}")
     public ResponseEntity<Map<String, Object>> getActiveSessionsInfo(@PathVariable String movieId) {
+        // movieId 예시: "movie-avatar3", "movie-spiderman2" 등
         long currentActiveSessions = admissionService.getCurrentActiveSessionsCount("movie", movieId);
         long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
         long vacantSlots = admissionService.getVacantSlots("movie", movieId);
