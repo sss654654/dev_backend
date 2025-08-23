@@ -1,34 +1,25 @@
 package com.example.admission.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import lombok.Getter;
+
+@Getter
+@JsonInclude(JsonInclude.Include.NON_NULL) // null인 필드는 JSON에서 제외
 public class EnterResponse {
 
-    private Status status;
-    private String message;
-    private String requestId;
-    private String waitUrl;
+    public enum Status { SUCCESS, QUEUED, FAILED }
 
-    public enum Status {
-        SUCCESS, QUEUED, FAILED
-    }
+    private final Status status;
+    private final String message;
+    private final String requestId;
+    private final Long myRank;
+    private final Long totalWaiting;
 
-    // 기본 생성자
-    public EnterResponse() {}
-
-    // 모든 필드를 받는 생성자
-    public EnterResponse(Status status, String message, String requestId, String waitUrl) {
+    public EnterResponse(Status status, String message, String requestId, Long myRank, Long totalWaiting) {
         this.status = status;
         this.message = message;
         this.requestId = requestId;
-        this.waitUrl = waitUrl;
+        this.myRank = myRank;
+        this.totalWaiting = totalWaiting;
     }
-
-    // Getters and Setters
-    public Status getStatus() { return status; }
-    public void setStatus(Status status) { this.status = status; }
-    public String getMessage() { return message; }
-    public void setMessage(String message) { this.message = message; }
-    public String getRequestId() { return requestId; }
-    public void setRequestId(String requestId) { this.requestId = requestId; }
-    public String getWaitUrl() { return waitUrl; }
-    public void setWaitUrl(String waitUrl) { this.waitUrl = waitUrl; }
 }

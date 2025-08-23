@@ -14,6 +14,9 @@ public class WebConfig implements WebMvcConfigurer {
                     // S3 버킷 URL (실제 버킷 이름)
                     "http://prod-iamroot-s3-fe.s3-website.ap-northeast-2.amazonaws.com",
                     "https://prod-iamroot-s3-fe.s3.ap-northeast-2.amazonaws.com",
+                    // CloudFront 도메인
+                    "https://cgv.peacemaker.kr",
+                    "http://cgv.peacemaker.kr",
                     // 로컬 개발용
                     "http://localhost:3000",
                     "http://localhost:5173",
