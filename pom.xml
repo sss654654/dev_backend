@@ -27,7 +27,7 @@
         <sonar.java.binaries>target/classes/com/example</sonar.java.binaries>
         <!-- AWS SDK 버전 -->
         <aws.sdk.version>2.20.26</aws.sdk.version>
-        <!-- Fabric8 Kubernetes Client 버전 -->
+        <!-- Fabric8 Kubernetes Client 버전 --> . 
         <fabric8.version>6.9.2</fabric8.version>
     </properties>
 
