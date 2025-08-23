@@ -1,15 +1,28 @@
-
 # Admission Control (대기열 시스템) 관련 설정
 admission:
+  # ★★★ 기존 설정 (fallback용으로 유지) ★★★
   max-active-sessions: 2
   session-timeout-seconds: 30
   kinesis-stream-name: "cgv-admissions-stream"
+  
+  # ★★★ 새로운 동적 스케일링 설정 ★★★
+  base-sessions-per-pod: 2          # Pod 하나당 기본 세션 수
+  max-total-sessions: 50            # 전체 최대 세션 수 제한 (안전장치)
+  enable-dynamic-scaling: true      # 동적 스케일링 활성화 여부
+  fallback-pod-count: 1             # Kubernetes 연결 실패 시 사용할 Pod 수
+
+# Kubernetes 관련 설정
+kubernetes:
+  namespace: default                # Pod 조회할 네임스페이스
+  
+admission-discovery:
+  enable-k8s-discovery: true        # Kubernetes Pod Discovery 활성화
 
 spring:
   profiles:
     active: local
   
-  # ========== AWS 설정 추가 (중요!) ==========.
+  # ========== AWS 설정 추가 (중요!) ==========
   cloud:
     aws:
       region:
@@ -83,6 +96,7 @@ logging:
   level:
     com.example.usermanagement: DEBUG
     com.example.admission.QueueProcessor: WARN
+    com.example.k8s: DEBUG  # ★ Kubernetes 관련 로깅 추가
     org.springframework.web: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
@@ -159,23 +173,29 @@ spring:
       ddl-auto: validate
     show-sql: false  # 운영환경에서는 SQL 로그 비활성화
 
-# Admission Control 설정
+# ★★★ 운영환경 Admission Control 설정 ★★★
 admission:
   kinesis-stream-name: ${KINESIS_STREAM_NAME}
-  max-active-sessions: ${MAX_ACTIVE_SESSIONS}
-  session-timeout-seconds: ${SESSION_TIMEOUT_SECONDS}
+  max-active-sessions: ${MAX_ACTIVE_SESSIONS:2}
+  session-timeout-seconds: ${SESSION_TIMEOUT_SECONDS:30}
+  # 동적 스케일링 운영 설정
+  base-sessions-per-pod: ${BASE_SESSIONS_PER_POD:2}
+  max-total-sessions: ${MAX_TOTAL_SESSIONS:100}  # 운영환경은 더 큰 값
+  enable-dynamic-scaling: ${ENABLE_DYNAMIC_SCALING:true}
+  fallback-pod-count: ${FALLBACK_POD_COUNT:3}   # 운영환경 fallback
 
+# Kubernetes 운영환경 설정
+kubernetes:
+  namespace: ${KUBERNETES_NAMESPACE:default}
+
+admission-discovery:
+  enable-k8s-discovery: ${ENABLE_K8S_DISCOVERY:true}
 
 # 운영환경 로깅 설정
 logging:
   level:
-      # 기존 로깅 설정 유지하고 추가
     software.amazon.awssdk: INFO
     software.amazon.awssdk.request: DEBUG  # AWS API 요청 로그
     io.awspring.cloud: INFO
-   # root: INFO
-   # com.example.usermanagement: INFO
-   # com.example.admission.QueueProcessor: WARN
-   # software.amazon.awssdk: WARN
-   # io.awspring.cloud: INFO
-    
+    com.example.k8s: INFO  # 운영환경에서는 INFO 레벨
+    com.example.admission: INFO
