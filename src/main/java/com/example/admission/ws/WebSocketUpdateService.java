@@ -55,4 +55,18 @@ public class WebSocketUpdateService {
         template.convertAndSend(destination, payload);
         logger.info("==> WebSocket STATS to {}: {}", destination, payload);
     }
+
+    /**
+     * ★★★ 새로 추가: 세션 타임아웃으로 퇴장된 사용자에게 알림을 보냅니다. ★★★
+     * @param requestId 사용자의 고유 요청 ID
+     */
+    public void notifyTimeout(String requestId) {
+        String destination = "/topic/timeout/" + requestId;
+        Map<String, String> payload = Map.of(
+                "status", "TIMEOUT",
+                "message", "세션 유효 시간이 만료되어 자동으로 퇴장 처리되었습니다."
+        );
+        template.convertAndSend(destination, payload);
+        logger.warn("==> WebSocket TIMEOUT to {}: {}", destination, payload);
+    }
 }
