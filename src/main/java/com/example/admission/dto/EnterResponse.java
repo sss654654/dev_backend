@@ -1,9 +1,7 @@
 package com.example.admission.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import lombok.Getter;
 
-@Getter
 @JsonInclude(JsonInclude.Include.NON_NULL) // null인 필드는 JSON에서 제외
 public class EnterResponse {
 
@@ -21,5 +19,26 @@ public class EnterResponse {
         this.requestId = requestId;
         this.myRank = myRank;
         this.totalWaiting = totalWaiting;
+    }
+    
+    // [오류 수정] 누락되었던 Getter 메소드들을 추가합니다.
+    public Status getStatus() {
+        return status;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public String getRequestId() {
+        return requestId;
+    }
+
+    public Long getMyRank() {
+        return myRank;
+    }
+
+    public Long getTotalWaiting() {
+        return totalWaiting;
     }
 }

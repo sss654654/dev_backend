@@ -16,6 +16,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
@@ -26,6 +27,9 @@ public class AdmissionService {
 
     @Value("${admission.max-active-sessions:2}")
     private long fallbackMaxActiveSessions;
+
+    @Value("${admission.session-timeout-seconds:30}")
+    private long sessionTimeoutSeconds;
 
     private final RedisTemplate<String, String> redisTemplate;
     private final DynamicSessionCalculator sessionCalculator;
@@ -48,6 +52,7 @@ public class AdmissionService {
     public EnterResponse tryEnter(String type, String id, String sessionId, String requestId) {
         String activeSessionsKey = "active_sessions:" + type + ":" + id;
         String waitingQueueKey = "waiting_queue:" + type + ":" + id;
+        String activeUsersKeyPrefix = "active_users:" + type + ":" + id + ":";
         String member = requestId + ":" + sessionId;
 
         long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
@@ -56,6 +61,8 @@ public class AdmissionService {
 
         if (currentActiveSessions < maxActiveSessions) {
             setOps.add(activeSessionsKey, member);
+            redisTemplate.opsForValue().set(activeUsersKeyPrefix + member, "1", Duration.ofSeconds(sessionTimeoutSeconds));
+            
             logger.info("[{}] 즉시 입장 성공: {}/{}", id, currentActiveSessions + 1, maxActiveSessions);
             return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장되었습니다.", requestId, null, null);
         } else {
@@ -101,16 +108,12 @@ public class AdmissionService {
         return Math.max(0, max - current);
     }
     
-    /**
-     * [오류 수정] KEYS 대신 SCAN을 사용하여 모든 활성 대기열의 영화 ID를 안전하게 가져옵니다.
-     */
     public Set<String> getActiveQueueMovieIds() {
         Set<String> movieIds = new HashSet<>();
-        // 'SCAN'은 커서를 사용하므로, 모든 키를 다 찾을 때까지 반복해야 합니다.
         redisTemplate.execute((RedisConnection connection) -> {
             try (Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions()
-                    .match("waiting_queue:movie:*") // 이 패턴과 일치하는 키를 찾습니다.
-                    .count(100) // 한 번에 100개씩 스캔합니다.
+                    .match("waiting_queue:movie:*")
+                    .count(100)
                     .build())) {
 
                 while (cursor.hasNext()) {
@@ -143,11 +146,10 @@ public class AdmissionService {
         RedisScript<List> redisScript = new DefaultRedisScript<>(script, List.class);
         
         try {
-            long sessionTimeout = 30;
             List<String> admittedMembers = (List<String>) redisTemplate.execute(redisScript,
                     List.of(waitingQueueKey, activeSessionsKey, activeUsersKey),
                     String.valueOf(count),
-                    String.valueOf(sessionTimeout));
+                    String.valueOf(sessionTimeoutSeconds));
 
             if (admittedMembers == null || admittedMembers.isEmpty()) {
                 return Collections.emptyMap();
