@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet; // 👈 [ERROR FIXED] This line was missing
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -50,7 +51,6 @@ public class SessionTimeoutProcessor {
         long totalTimeouts = 0;
 
         try {
-            // [오류 수정] KEYS 대신 SCAN을 사용하여 active_sessions 키들을 가져옵니다.
             Set<String> activeSessionKeys = scanKeys("active_sessions:movie:*");
 
             for (String activeSessionsKey : activeSessionKeys) {
@@ -59,7 +59,6 @@ public class SessionTimeoutProcessor {
                 
                 totalProcessedMovies++;
                 
-                // [오류 수정] ZSET 명령어가 아닌, SET의 모든 멤버를 가져옵니다.
                 Set<String> members = redisTemplate.opsForSet().members(activeSessionsKey);
                 if (members == null || members.isEmpty()) continue;
 
@@ -69,11 +68,9 @@ public class SessionTimeoutProcessor {
                     keysToCheck.add("active_users:movie:" + movieId + ":" + member);
                 }
 
-                // 한 번의 MGET으로 모든 타임아웃 키의 존재 여부를 확인합니다.
                 List<String> existingTimeoutKeys = redisTemplate.opsForValue().multiGet(keysToCheck);
 
                 for (int i = 0; i < members.size(); i++) {
-                    // MGET의 결과가 null이면, 해당 키가 존재하지 않음(만료됨)을 의미합니다.
                     if (existingTimeoutKeys.get(i) == null) {
                         expiredMembers.add(new ArrayList<>(members).get(i));
                     }
