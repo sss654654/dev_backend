@@ -22,12 +22,12 @@ public class AdmissionService {
     private long fallbackMaxActiveSessions;
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final DynamicSessionCalculator sessionCalculator; // ★ 새로 추가
+    private final com.example.admission.service.DynamicSessionCalculator sessionCalculator; // ★ 새로 추가
     private ZSetOperations<String, String> zSetOps;
     private SetOperations<String, String> setOps;
 
     public AdmissionService(RedisTemplate<String, String> redisTemplate, 
-                           DynamicSessionCalculator sessionCalculator) { // ★ 생성자 수정
+                           com.example.admission.service.DynamicSessionCalculator sessionCalculator) { // ★ 생성자 수정
         this.redisTemplate = redisTemplate;
         this.sessionCalculator = sessionCalculator;
     }
@@ -235,7 +235,7 @@ public class AdmissionService {
     /**
      * API로 현재 설정을 확인할 수 있도록 public 메서드 제공
      */
-    public DynamicSessionCalculator.SessionCalculationInfo getCurrentConfiguration() {
+    public com.example.admission.service.DynamicSessionCalculator.SessionCalculationInfo getCurrentConfiguration() {
         return sessionCalculator.getCalculationInfo();
     }
 }

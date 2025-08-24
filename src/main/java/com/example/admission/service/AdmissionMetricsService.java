@@ -21,7 +21,7 @@ public class AdmissionMetricsService {
     
     private final RedisTemplate<String, String> redisTemplate;
     private final AdmissionService admissionService;
-    private final DynamicSessionCalculator sessionCalculator;
+    private final com.example.admission.service.DynamicSessionCalculator sessionCalculator;
     
     // 실시간 메트릭 저장
     private final Map<String, AtomicLong> realtimeMetrics = new ConcurrentHashMap<>();
@@ -29,7 +29,7 @@ public class AdmissionMetricsService {
     
     public AdmissionMetricsService(RedisTemplate<String, String> redisTemplate,
                                    AdmissionService admissionService,
-                                   DynamicSessionCalculator sessionCalculator) {
+                                   com.example.admission.service.DynamicSessionCalculator sessionCalculator) {
         this.redisTemplate = redisTemplate;
         this.admissionService = admissionService;
         this.sessionCalculator = sessionCalculator;
