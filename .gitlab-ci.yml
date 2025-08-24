@@ -19,7 +19,7 @@ default:
   tags: 
     - cwave
 
-# ★★★ SonarQube 코드 품질 검사 ★★★. 
+# ★★★ SonarQube 코드 품질 검사 ★★★. .
 build-sonar:
   stage: test
   cache:
