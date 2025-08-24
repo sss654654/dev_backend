@@ -74,4 +74,11 @@ public class HealthCheckController {
             : HttpStatus.SERVICE_UNAVAILABLE;
         return ResponseEntity.status(status).body(response);
     }
+
+    @GetMapping("/force-fail-503")
+    public ResponseEntity<String> forceFail() {
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body("Forced failure - return 503");
+    }
 }
