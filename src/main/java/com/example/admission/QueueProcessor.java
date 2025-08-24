@@ -19,26 +19,34 @@ public class QueueProcessor {
     private final AdmissionService admissionService;
     private final WebSocketUpdateService webSocketUpdateService;
     private final DynamicSessionCalculator sessionCalculator;
-    private final KinesisAdmissionProducer kinesisProducer; // ★ 추가
+    private final KinesisAdmissionProducer kinesisProducer;
 
     @Value("${admission.enable-proactive-admission:true}")
     private boolean enableProactiveAdmission;
 
-    @Value("${admission.use-kinesis:true}") // ★ Kinesis 사용 여부 설정
+    @Value("${admission.use-kinesis:true}")
     private boolean useKinesis;
 
     public QueueProcessor(AdmissionService admissionService, 
-                         WebSocketUpdateService webSocketUpdateService,
-                         DynamicSessionCalculator sessionCalculator,
-                         KinesisAdmissionProducer kinesisProducer) { // ★ Producer 주입
+                          WebSocketUpdateService webSocketUpdateService,
+                          DynamicSessionCalculator sessionCalculator,
+                          KinesisAdmissionProducer kinesisProducer) {
         this.admissionService = admissionService;
         this.webSocketUpdateService = webSocketUpdateService;
         this.sessionCalculator = sessionCalculator;
-        this.kinesisProducer = kinesisProducer; // ★ 추가
+        this.kinesisProducer = kinesisProducer;
     }
 
+    /**
+     * 시스템의 심장 역할.
+     * 주기적으로 활성 대기열을 확인하고, 빈자리가 생겼다면 새로운 사용자를 입장시킨다.
+     */
     @Scheduled(fixedRate = 2000) // 2초마다 실행
     public void processQueues() {
+        if (!enableProactiveAdmission) {
+            return;
+        }
+        
         final String type = "movie";
         
         try {
@@ -48,10 +56,8 @@ public class QueueProcessor {
             }
 
             for (String movieId : activeMovieIds) {
-                // ★★★ 적극적인 빈 슬롯 활용 ★★★
-                if (enableProactiveAdmission) {
-                    processProactiveAdmission(type, movieId);
-                }
+                // ★★★ 이 클래스의 핵심 책임: 적극적으로 빈 슬롯을 찾아 입장 처리 ★★★
+                processProactiveAdmission(type, movieId);
 
                 // 대기자들에게 상태 업데이트
                 updateWaitingUsersStatus(type, movieId);
@@ -65,7 +71,7 @@ public class QueueProcessor {
     }
 
     /**
-     * ★★★ 적극적인 빈 슬롯 활용 - Kinesis Producer 연동 ★★★
+     * Kinesis Producer와 연동하여 새로운 사용자를 입장시키는 로직
      */
     private void processProactiveAdmission(String type, String movieId) {
         try {
@@ -97,7 +103,7 @@ public class QueueProcessor {
                     // 1. Redis 활성 세션에 추가
                     admissionService.addToActiveSessions(type, movieId, sessionId, requestId);
                     
-                    // 2. ★★★ 핵심 변경: Kinesis 사용 여부에 따라 분기 ★★★
+                    // 2. Kinesis 사용 여부에 따라 분기하여 알림 전송
                     if (useKinesis) {
                         // Kinesis Producer로 이벤트 전송 (Consumer가 받아서 WebSocket 처리)
                         kinesisProducer.publishAdmitEvent(requestId, movieId, sessionId);
@@ -105,54 +111,35 @@ public class QueueProcessor {
                     } else {
                         // 기존 방식: 직접 WebSocket 전송 (fallback)
                         webSocketUpdateService.notifyAdmitted(requestId);
-                        logger.info("PROCESSOR: 직접 WebSocket 전송 -> requestId: {}", requestId);
+                        logger.warn("PROCESSOR: Kinesis 비활성화, 직접 WebSocket 전송 -> requestId: {}", requestId);
                     }
                 }
-
-                logger.info("[{}:{}] 적극적 입장 처리 완료 - {}명 동시 입장 (Kinesis: {})", 
-                    type, movieId, admittedUsers.size(), useKinesis);
             }
         } catch (Exception e) {
             logger.error("[{}:{}] 적극적 입장 처리 중 오류", type, movieId, e);
         }
     }
-
-    /**
-     * ★★★ Pod 수 기반 적극적 배치 크기 계산 ★★★
-     */
+    
+    // (calculateProactiveBatchSize, updateWaitingUsersStatus, updateWaitingUsersRank 메서드는 변경 없음)
+    
     private long calculateProactiveBatchSize(long vacantSlots, long waitingCount) {
         try {
             var calcInfo = sessionCalculator.getCalculationInfo();
             int podCount = calcInfo.currentPodCount();
-            
-            // Pod 수에 비례한 기본 배치 크기
-            long baseBatchSize = Math.max(podCount / 2, 1); // Pod의 절반 정도
-            
-            // 안전한 범위 내에서 처리
+            long baseBatchSize = Math.max(podCount / 2, 1);
             long safeBatchSize = Math.min(Math.min(vacantSlots, waitingCount), baseBatchSize);
-            
-            // 최대 5명까지만 (너무 많이 처리하지 않도록)
             return Math.min(safeBatchSize, 5);
-            
         } catch (Exception e) {
             logger.error("적극적 배치 크기 계산 중 오류", e);
             return Math.min(vacantSlots, 1);
         }
     }
-
-    /**
-     * 대기자들에게 상태 업데이트 (기존 기능 유지)
-     */
+    
     private void updateWaitingUsersStatus(String type, String movieId) {
         try {
             long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
-            
-            // 전체 대기자 수 브로드캐스트
             webSocketUpdateService.broadcastQueueStats(movieId, totalWaiting);
-
-            // 각 대기자에게 자신의 현재 순위 전송
             updateWaitingUsersRank(type, movieId);
-            
         } catch (Exception e) {
             logger.error("[{}:{}] 대기자 상태 업데이트 실패", type, movieId, e);
         }
@@ -162,10 +149,7 @@ public class QueueProcessor {
         try {
             Map<String, Long> userRanks = admissionService.getAllUserRanks(type, movieId);
             if (userRanks.isEmpty()) return;
-
-            userRanks.forEach((requestId, rank) -> {
-                webSocketUpdateService.notifyRankUpdate(requestId, rank);
-            });
+            userRanks.forEach(webSocketUpdateService::notifyRankUpdate);
         } catch (Exception e) {
             logger.error("대기 순위 업데이트 실패: movieId={}", movieId, e);
         }
