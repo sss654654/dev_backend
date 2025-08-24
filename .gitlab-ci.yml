@@ -19,6 +19,7 @@ default:
   tags: 
     - cwave
 
+# ★★★ SonarQube 코드 품질 검사 ★★★
 build-sonar:
   stage: test
   cache:
@@ -28,8 +29,9 @@ build-sonar:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
   script:
-    - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
-  allow_failure: true
+    - echo "=== Running SonarQube Analysis ==="
+    - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=$SONAR_TOKEN
+  allow_failure: true  # 실패해도 파이프라인 계속 진행
 
 owasp_dependency_check:
   image:
