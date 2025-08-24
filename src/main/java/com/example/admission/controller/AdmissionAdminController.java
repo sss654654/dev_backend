@@ -34,31 +34,11 @@ public class AdmissionAdminController {
         return ResponseEntity.ok(sessionCalculator.getCalculationInfo());
     }
 
-    @Operation(summary = "Pod 수 강제 새로고침", description = "Kubernetes에서 Pod 수를 즉시 다시 조회합니다")
-    @PostMapping("/refresh-pods")
-    public ResponseEntity<Map<String, Object>> refreshPods() {
-        int previousCount = podDiscoveryService.getCurrentPodCount();
-        
-        // 강제로 Pod 수 업데이트
-        podDiscoveryService.updatePodCount();
-        
-        int currentCount = podDiscoveryService.getCurrentPodCount();
-        long maxSessions = sessionCalculator.calculateMaxActiveSessions();
-        
-        Map<String, Object> response = new HashMap<>();
-        response.put("previousPodCount", previousCount);
-        response.put("currentPodCount", currentCount);
-        response.put("calculatedMaxSessions", maxSessions);
-        response.put("refreshed", true);
-        
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(summary = "영화별 현재 활성 세션 수 조회", description = "특정 영화의 현재 활성 세션 수를 확인합니다")
-    @GetMapping("/active-sessions/{movieId}")
-    public ResponseEntity<Map<String, Object>> getActiveSessionsInfo(@PathVariable String movieId) {
-        // movieId 예시: "movie-avatar3", "movie-spiderman2" 등
-        long currentActiveSessions = admissionService.getCurrentActiveSessionsCount("movie", movieId);
+    @Operation(summary = "특정 영화 세션 활용도 조회", description = "특정 영화의 현재 활성 세션 수와 최대 수용량을 확인합니다")
+    @GetMapping("/utilization/{movieId}")
+    public ResponseEntity<Map<String, Object>> getSessionUtilization(@PathVariable String movieId) {
+        // [오류 수정] 메소드 이름을 올바르게 변경합니다.
+        long currentActiveSessions = admissionService.getActiveSessionCount("movie", movieId);
         long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
         long vacantSlots = admissionService.getVacantSlots("movie", movieId);
         
