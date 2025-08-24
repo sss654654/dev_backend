@@ -41,7 +41,7 @@ spring:
   application:
     name: user-management-backend
 
-  # 로컬 개발용 .env 파일 import / 
+  # 로컬 개발용 .env 파일 import / ..
   config:
     import: optional:file:.env[.properties]
 
