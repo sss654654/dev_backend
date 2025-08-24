@@ -24,12 +24,6 @@ admission:
 
   use-kinesis: true     
 
-  # ★★★ 1단계: 동적 스케일링 설정 ★★★
-  base-sessions-per-pod: 2          # Pod 하나당 기본 세션 수
-  max-total-sessions: 50            # 전체 최대 세션 수 제한 (안전장치)
-  enable-dynamic-scaling: true      # 동적 스케일링 활성화 여부
-  fallback-pod-count: 1             # Kubernetes 연결 실패 시 사용할 Pod 수
-
 
   # Kinesis 및 세션 타임아웃
   kinesis-stream-name: ${KINESIS_STREAM_NAME:prod-cgv-admissions-stream}
