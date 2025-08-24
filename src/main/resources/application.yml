@@ -13,6 +13,7 @@ admission:
   max-total-sessions: ${MAX_TOTAL_SESSIONS:50}
   fallback-pod-count: ${FALLBACK_POD_COUNT:1}
   
+
   # 배치 처리 및 부하분산 설정
   aggressive-batch-processing: true
   enable-proactive-admission: true
@@ -20,6 +21,15 @@ admission:
   load-balancing-strategy: "ROUND_ROBIN"
   metrics-collection-interval: 5000
   performance-auto-tuning: true
+
+  use-kinesis: true     
+
+  # ★★★ 1단계: 동적 스케일링 설정 ★★★
+  base-sessions-per-pod: 2          # Pod 하나당 기본 세션 수
+  max-total-sessions: 50            # 전체 최대 세션 수 제한 (안전장치)
+  enable-dynamic-scaling: true      # 동적 스케일링 활성화 여부
+  fallback-pod-count: 1             # Kubernetes 연결 실패 시 사용할 Pod 수
+
 
   # Kinesis 및 세션 타임아웃
   kinesis-stream-name: ${KINESIS_STREAM_NAME:prod-cgv-admissions-stream}

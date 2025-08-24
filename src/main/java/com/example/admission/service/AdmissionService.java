@@ -11,7 +11,6 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class AdmissionService {
@@ -23,12 +22,12 @@ public class AdmissionService {
     private long fallbackMaxActiveSessions;
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final DynamicSessionCalculator sessionCalculator; // ★ 새로 추가
+    private final com.example.admission.service.DynamicSessionCalculator sessionCalculator; // ★ 새로 추가
     private ZSetOperations<String, String> zSetOps;
     private SetOperations<String, String> setOps;
 
     public AdmissionService(RedisTemplate<String, String> redisTemplate, 
-                           DynamicSessionCalculator sessionCalculator) { // ★ 생성자 수정
+                           com.example.admission.service.DynamicSessionCalculator sessionCalculator) { // ★ 생성자 수정
         this.redisTemplate = redisTemplate;
         this.sessionCalculator = sessionCalculator;
     }
@@ -133,20 +132,26 @@ public class AdmissionService {
     }
 
     /**
-     * 대기열에서 다음 사용자들을 가져옴 (Pod 수에 비례해서 더 많이 처리 가능)
+     * ✅ 수정: 대기열에서 다음 사용자들을 가져옴 (타입 안전성 확보)
      */
     public Map<String, String> popNextUsersFromQueue(String type, String id, long count) {
         String waitingQueueKey = getWaitingQueueKey(type, id);
         Map<String, String> result = new HashMap<>();
         
         for (int i = 0; i < count; i++) {
+            // ✅ range(0, 0)으로 첫 번째 요소만 가져오기
             Set<String> nextMembers = zSetOps.range(waitingQueueKey, 0, 0);
             if (nextMembers == null || nextMembers.isEmpty()) {
                 break;
             }
             
             String member = nextMembers.iterator().next();
-            zSetOps.remove(waitingQueueKey, member);
+            // 먼저 제거한 후 처리
+            Long removeCount = zSetOps.remove(waitingQueueKey, member);
+            if (removeCount == null || removeCount == 0) {
+                // 이미 다른 스레드에서 제거된 경우
+                continue;
+            }
             
             String[] parts = member.split(":", 2);
             if (parts.length == 2) {
@@ -186,8 +191,12 @@ public class AdmissionService {
         }
     }
 
+    /**
+     * ✅ 수정: 모든 사용자 순위 가져오기 (타입 안전성 확보)
+     */
     public Map<String, Long> getAllUserRanks(String type, String id) {
         String waitingQueueKey = getWaitingQueueKey(type, id);
+        // ✅ 단순한 range() 사용 - Set<String> 반환
         Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
         if (members == null || members.isEmpty()) {
             return Collections.emptyMap();
@@ -226,7 +235,7 @@ public class AdmissionService {
     /**
      * API로 현재 설정을 확인할 수 있도록 public 메서드 제공
      */
-    public DynamicSessionCalculator.SessionCalculationInfo getCurrentConfiguration() {
+    public com.example.admission.service.DynamicSessionCalculator.SessionCalculationInfo getCurrentConfiguration() {
         return sessionCalculator.getCalculationInfo();
     }
 }
