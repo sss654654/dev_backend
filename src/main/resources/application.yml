@@ -1,119 +1,133 @@
+# ===============================================================
+#          기본 프로필 (Default / Local)
+# ===============================================================
+# 모든 환경에서 공통으로 사용되는 기본 설정을 정의합니다.
+# 로컬 개발 시에는 이 프로필이 기본으로 활성화됩니다.
+# ---------------------------------------------------------------
+
 # Admission Control (대기열 시스템) 관련 설정
 admission:
-  # ★★★ 기존 설정 (fallback용으로 유지) ★★★
-  max-active-sessions: 2
-  session-timeout-seconds: 30
-  kinesis-stream-name: "cgv-admissions-stream"
+  # 동적 스케일링 설정 (환경 변수가 없으면 이 기본값을 사용)
+  enable-dynamic-scaling: ${ENABLE_DYNAMIC_SCALING:true}
+  base-sessions-per-pod: ${BASE_SESSIONS_PER_POD:2}
+  max-total-sessions: ${MAX_TOTAL_SESSIONS:50}
+  fallback-pod-count: ${FALLBACK_POD_COUNT:1}
   
-  # ★★★ 1단계: 동적 스케일링 설정 ★★★
-  base-sessions-per-pod: 2          # Pod 하나당 기본 세션 수
-  max-total-sessions: 50            # 전체 최대 세션 수 제한 (안전장치)
-  enable-dynamic-scaling: true      # 동적 스케일링 활성화 여부
-  fallback-pod-count: 1             # Kubernetes 연결 실패 시 사용할 Pod 수
+  # 배치 처리 및 부하분산 설정
+  aggressive-batch-processing: true
+  enable-proactive-admission: true
+  enable-load-balancing: true
+  load-balancing-strategy: "ROUND_ROBIN"
+  metrics-collection-interval: 5000
+  performance-auto-tuning: true
 
-  # ★★★ 2단계: 배치 처리 설정 ★★★
-  aggressive-batch-processing: true    # 적극적 배치 처리 활성화
-  enable-proactive-admission: true     # 적극적 빈 슬롯 활용 활성화
-  
-  # ★★★ 3단계: 모니터링 & 부하분산 설정 ★★★
-  enable-load-balancing: true          # 부하 분산 활성화
-  load-balancing-strategy: "ROUND_ROBIN"  # ROUND_ROBIN, HASH_BASED, LEAST_LOADED
-  metrics-collection-interval: 5000    # 메트릭 수집 주기 (ms)
-  performance-auto-tuning: true        # 자동 성능 튜닝 활성화
+  # Kinesis 및 세션 타임아웃
+  kinesis-stream-name: ${KINESIS_STREAM_NAME:prod-cgv-admissions-stream}
+  max-active-sessions: ${MAX_ACTIVE_SESSIONS:2}
+  session-timeout-seconds: ${SESSION_TIMEOUT_SECONDS:30}
 
-# Kubernetes 관련 설정
+# Kubernetes Pod Discovery 관련 설정
 kubernetes:
-  namespace: default                # Pod 조회할 네임스페이스
-  
+  namespace: ${KUBERNETES_NAMESPACE:default}
 admission-discovery:
-  enable-k8s-discovery: true        # Kubernetes Pod Discovery 활성화
+  enable-k8s-discovery: ${ENABLE_K8S_DISCOVERY:true}
 
 spring:
+  # 기본 활성 프로필
   profiles:
     active: local
-  
-  # ========== AWS 설정 추가 (중요!) ==========
-  cloud:
-    aws:
-      region:
-        static: ap-northeast-2  # 리전 명시적 설정
-      stack:
-        auto: false  # CloudFormation 스택 자동 감지 비활성화
-      kinesis:
-        enabled: true
-      credentials:
-        instance-profile: true  # IRSA 사용
-        
-  data:
-    redis:
-      host: redis
-      port: 6379
-      timeout: 2000ms  # 타임아웃 추가
-      lettuce:
-        pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 0
 
+  # 애플리케이션 정보
   application:
     name: user-management-backend
-    
+
+  # 로컬 개발용 .env 파일 import
   config:
     import: optional:file:.env[.properties]
-    
+
+  # ========== 데이터소스 설정 (Write/Read 분리) ==========
   datasource:
     write:
       name: write
-      jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
+      jdbc-url: jdbc:mysql://${WRITE_URL:localhost}:${WRITE_PORT:3306}/${DB:cgv}
       driver-class-name: com.mysql.cj.jdbc.Driver
-      username: ${USERNAME}
-      password: ${PASSWORD}
+      username: ${USERNAME:root}
+      password: ${PASSWORD:password}
       hikari:
         maximum-pool-size: 10
         minimum-idle: 5
     read:
       name: read
-      jdbc-url: jdbc:mysql://${READ_URL}:${READ_PORT}/${DB}
+      jdbc-url: jdbc:mysql://${READ_URL:localhost}:${READ_PORT:3306}/${DB:cgv}
       driver-class-name: com.mysql.cj.jdbc.Driver
-      username: ${USERNAME}
-      password: ${PASSWORD}
+      username: ${USERNAME:root}
+      password: ${PASSWORD:password}
       hikari:
         maximum-pool-size: 10
         minimum-idle: 5
 
+  # ========== JPA 및 Hibernate 설정 ==========
   jpa:
     database-platform: org.hibernate.dialect.MySQL8Dialect
-    hibernate:
-      ddl-auto: create-drop
     show-sql: true
+    hibernate:
+      ddl-auto: create-drop # 로컬/개발 환경에서는 스키마 자동 생성/삭제
     properties:
       hibernate:
         format_sql: true
         use_sql_comments: true
     defer-datasource-initialization: false
 
+  # ========== Redis 설정 ==========
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost} # 기본값으로 localhost 사용
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:false} # 로컬에서는 SSL 비활성화
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # ========== AWS 연동 설정 ==========
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:ap-northeast-2}
+      stack:
+        auto: false # CloudFormation 스택 자동 감지 비활성화
+      kinesis:
+        enabled: true
+      credentials:
+        instance-profile: true # EKS IRSA 사용
+
+  # DB 초기화 SQL 설정
   sql:
     init:
       mode: always
       data-locations: classpath:data.sql
 
+# 서버 설정
 server:
   port: 8080
   servlet:
     context-path: /
 
+# 로깅 설정
 logging:
   level:
-    com.example.usermanagement: DEBUG
+    com.example: DEBUG
     com.example.admission.QueueProcessor: WARN
-    com.example.k8s: DEBUG  # ★ Kubernetes 관련 로깅 추가
     org.springframework.web: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-    # AWS 관련 로깅 추가
     software.amazon.awssdk: DEBUG
     io.awspring.cloud: DEBUG
 
+# Swagger (API 문서) 설정
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -128,29 +142,21 @@ springdoc:
   default-produces-media-type: application/json
 
 ---
+
+# ===============================================================
+#          운영 환경 (prod) 프로필
+# ===============================================================
+# 'prod' 프로필 활성화 시, 아래 설정들이 기본 프로필 설정을 덮어씁니다.
+# 공통 설정은 위에 정의되어 있으므로, 여기서는 변경되는 값만 관리합니다.
+# ---------------------------------------------------------------
 spring:
   config:
     activate:
       on-profile: prod
 
-  # ========== 운영환경 AWS 설정 ==========
-  cloud:
-    aws:
-      region:
-        static: ${AWS_REGION:ap-northeast-2}
-      stack:
-        auto: false
-      kinesis:
-        enabled: true
-        endpoint: https://kinesis.${AWS_REGION:ap-northeast-2}.amazonaws.com
-      credentials:
-        instance-profile: true
-
+  # ========== 운영용 데이터소스 설정 (커넥션 풀 확장) ==========
   datasource:
     write:
-      jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
-      username: ${USERNAME}
-      password: ${PASSWORD}
       hikari:
         maximum-pool-size: 20
         minimum-idle: 10
@@ -158,17 +164,13 @@ spring:
         idle-timeout: 300000
         max-lifetime: 1200000
     read:
-      jdbc-url: jdbc:mysql://${WRITE_URL}:${WRITE_PORT}/${DB}
-      username: ${USERNAME}
-      password: ${PASSWORD}
       hikari:
         maximum-pool-size: 20
         minimum-idle: 10
 
+  # ========== 운영용 Redis 설정 (SSL 활성화, 타임아웃/풀 확장) ==========
   data:
     redis:
-      host: ${REDIS_HOST}
-      port: ${REDIS_PORT}
       timeout: 5000ms
       ssl:
         enabled: true
@@ -178,34 +180,27 @@ spring:
           max-idle: 10
           min-idle: 5
 
+  # ========== 운영용 JPA 설정 (스키마 검증) ==========
   jpa:
     hibernate:
-      ddl-auto: validate
-    show-sql: false  # 운영환경에서는 SQL 로그 비활성화
+      ddl-auto: validate # 운영에서는 스키마를 직접 변경하지 않고 검증만 수행
+    show-sql: false # 운영에서는 SQL 로그 비활성화
 
-# ★★★ 운영환경 Admission Control 설정 ★★★
+  # ========== 운영용 AWS 설정 (Kinesis 엔드포인트 명시) ==========
+  cloud:
+    aws:
+      kinesis:
+        endpoint: https://kinesis.${AWS_REGION:ap-northeast-2}.amazonaws.com
+
+# ========== 운영용 Admission Control 설정 (값 상향) ==========
 admission:
-  kinesis-stream-name: ${KINESIS_STREAM_NAME}
-  max-active-sessions: ${MAX_ACTIVE_SESSIONS:2}
-  session-timeout-seconds: ${SESSION_TIMEOUT_SECONDS:30}
-  # 동적 스케일링 운영 설정
-  base-sessions-per-pod: ${BASE_SESSIONS_PER_POD:2}
-  max-total-sessions: ${MAX_TOTAL_SESSIONS:100}  # 운영환경은 더 큰 값
-  enable-dynamic-scaling: ${ENABLE_DYNAMIC_SCALING:true}
-  fallback-pod-count: ${FALLBACK_POD_COUNT:3}   # 운영환경 fallback
+  max-total-sessions: ${MAX_TOTAL_SESSIONS:10}
+  fallback-pod-count: ${FALLBACK_POD_COUNT:3}
 
-# Kubernetes 운영환경 설정
-kubernetes:
-  namespace: ${KUBERNETES_NAMESPACE:default}
-
-admission-discovery:
-  enable-k8s-discovery: ${ENABLE_K8S_DISCOVERY:true}
-
-# 운영환경 로깅 설정
+# ========== 운영용 로깅 설정 (로그 레벨 조정) ==========
 logging:
   level:
+    com.example: INFO # 운영에서는 INFO 레벨 이상만 기록
     software.amazon.awssdk: INFO
-    software.amazon.awssdk.request: DEBUG  # AWS API 요청 로그
+    software.amazon.awssdk.request: DEBUG # 단, AWS API 요청은 디버깅을 위해 DEBUG 유지
     io.awspring.cloud: INFO
-    com.example.k8s: INFO  # 운영환경에서는 INFO 레벨
-    com.example.admission: INFO
