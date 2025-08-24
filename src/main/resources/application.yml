@@ -5,6 +5,8 @@ admission:
   session-timeout-seconds: 30
   kinesis-stream-name: "cgv-admissions-stream"
   
+  use-kinesis: true     
+
   # ★★★ 1단계: 동적 스케일링 설정 ★★★
   base-sessions-per-pod: 2          # Pod 하나당 기본 세션 수
   max-total-sessions: 50            # 전체 최대 세션 수 제한 (안전장치)

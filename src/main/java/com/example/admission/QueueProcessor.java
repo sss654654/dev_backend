@@ -18,17 +18,23 @@ public class QueueProcessor {
     
     private final AdmissionService admissionService;
     private final WebSocketUpdateService webSocketUpdateService;
-    private final DynamicSessionCalculator sessionCalculator; // ★ 추가
+    private final DynamicSessionCalculator sessionCalculator;
+    private final KinesisAdmissionProducer kinesisProducer; // ★ 추가
 
-    @Value("${admission.enable-proactive-admission:true}") // ★ 새로운 설정
+    @Value("${admission.enable-proactive-admission:true}")
     private boolean enableProactiveAdmission;
+
+    @Value("${admission.use-kinesis:true}") // ★ Kinesis 사용 여부 설정
+    private boolean useKinesis;
 
     public QueueProcessor(AdmissionService admissionService, 
                          WebSocketUpdateService webSocketUpdateService,
-                         DynamicSessionCalculator sessionCalculator) { // ★ 추가
+                         DynamicSessionCalculator sessionCalculator,
+                         KinesisAdmissionProducer kinesisProducer) { // ★ Producer 주입
         this.admissionService = admissionService;
         this.webSocketUpdateService = webSocketUpdateService;
         this.sessionCalculator = sessionCalculator;
+        this.kinesisProducer = kinesisProducer; // ★ 추가
     }
 
     @Scheduled(fixedRate = 2000) // 2초마다 실행
@@ -42,12 +48,12 @@ public class QueueProcessor {
             }
 
             for (String movieId : activeMovieIds) {
-                // ★★★ 2단계 개선: 적극적인 빈 슬롯 활용 ★★★
+                // ★★★ 적극적인 빈 슬롯 활용 ★★★
                 if (enableProactiveAdmission) {
                     processProactiveAdmission(type, movieId);
                 }
 
-                // 기존 기능: 대기자들에게 상태 업데이트
+                // 대기자들에게 상태 업데이트
                 updateWaitingUsersStatus(type, movieId);
                 
                 // 대기열이 비었으면 활성 큐 목록에서 제거
@@ -59,7 +65,7 @@ public class QueueProcessor {
     }
 
     /**
-     * ★★★ 새로운 기능: 적극적인 빈 슬롯 활용 ★★★
+     * ★★★ 적극적인 빈 슬롯 활용 - Kinesis Producer 연동 ★★★
      */
     private void processProactiveAdmission(String type, String movieId) {
         try {
@@ -80,7 +86,7 @@ public class QueueProcessor {
             logger.info("[{}:{}] 적극적 입장 처리 - 빈 슬롯: {}, 대기자: {}, 처리할 인원: {}", 
                 type, movieId, vacantSlots, waitingCount, batchSize);
 
-            // 대기열에서 사용자들 추출하여 입장 처리
+            // 대기열에서 사용자들 추출
             Map<String, String> admittedUsers = admissionService.popNextUsersFromQueue(type, movieId, batchSize);
 
             if (!admittedUsers.isEmpty()) {
@@ -88,12 +94,23 @@ public class QueueProcessor {
                     String requestId = entry.getKey();
                     String sessionId = entry.getValue();
                     
+                    // 1. Redis 활성 세션에 추가
                     admissionService.addToActiveSessions(type, movieId, sessionId, requestId);
-                    webSocketUpdateService.notifyAdmitted(requestId);
+                    
+                    // 2. ★★★ 핵심 변경: Kinesis 사용 여부에 따라 분기 ★★★
+                    if (useKinesis) {
+                        // Kinesis Producer로 이벤트 전송 (Consumer가 받아서 WebSocket 처리)
+                        kinesisProducer.publishAdmitEvent(requestId, movieId, sessionId);
+                        logger.info("PROCESSOR: Kinesis 이벤트 전송 -> requestId: {}", requestId);
+                    } else {
+                        // 기존 방식: 직접 WebSocket 전송 (fallback)
+                        webSocketUpdateService.notifyAdmitted(requestId);
+                        logger.info("PROCESSOR: 직접 WebSocket 전송 -> requestId: {}", requestId);
+                    }
                 }
 
-                logger.info("[{}:{}] 적극적 입장 처리 완료 - {}명 동시 입장", 
-                    type, movieId, admittedUsers.size());
+                logger.info("[{}:{}] 적극적 입장 처리 완료 - {}명 동시 입장 (Kinesis: {})", 
+                    type, movieId, admittedUsers.size(), useKinesis);
             }
         } catch (Exception e) {
             logger.error("[{}:{}] 적극적 입장 처리 중 오류", type, movieId, e);
@@ -124,7 +141,7 @@ public class QueueProcessor {
     }
 
     /**
-     * 대기자들에게 상태 업데이트 (기존 기능)
+     * 대기자들에게 상태 업데이트 (기존 기능 유지)
      */
     private void updateWaitingUsersStatus(String type, String movieId) {
         try {

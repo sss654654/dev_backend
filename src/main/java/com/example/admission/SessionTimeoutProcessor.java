@@ -19,6 +19,8 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import java.nio.charset.StandardCharsets;
+
 @Component
 public class SessionTimeoutProcessor {
 
@@ -54,51 +56,59 @@ public class SessionTimeoutProcessor {
     @Scheduled(fixedRate = 2000)
     public void processExpiredSessionsAndAdmitNext() {
         if (sessionTimeoutSeconds <= 0) return;
-
         long startTime = System.currentTimeMillis();
         long expirationTime = startTime - (sessionTimeoutSeconds * 1000);
-        
-        ScanOptions options = ScanOptions.scanOptions().match("active_sessions:movie:*").count(100).build();
-        
+        ScanOptions options = ScanOptions.scanOptions()
+                .match("active_sessions:movie:*")
+                .count(100)
+                .build();
         int totalProcessedMovies = 0;
         int totalTimeouts = 0;
         int totalAdmissions = 0;
         
-        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+        // ✅ 수정: ConnectionFactory는 try-with-resources 밖으로
+        var connFactory = redisTemplate.getConnectionFactory();
+        if (connFactory == null) {
+            logger.warn("Redis 연결 팩토리를 가져올 수 없어 스캔을 건너뜁니다.");
+            return;
+        }
+        
+        try (var conn = connFactory.getConnection();
+            Cursor<byte[]> cursor = conn.scan(options)) {
+            
             while (cursor.hasNext()) {
-                String activeSessionsKey = cursor.next();
+                String activeSessionsKey = new String(cursor.next(), StandardCharsets.UTF_8);
                 String movieId = extractMovieId(activeSessionsKey);
                 if (movieId == null) continue;
-
-                // ★★★ 3단계: 부하 분산 확인 ★★★
+                
+                // 부하 분산 확인
                 if (!loadBalancer.shouldProcessMovie(movieId)) {
                     logger.debug("영화 {} 처리를 다른 Pod에 위임", movieId);
                     continue;
                 }
-
+                
                 totalProcessedMovies++;
-
+                
                 // 만료된 세션 처리
-                Set<String> expiredMembers = redisTemplate.opsForZSet().rangeByScore(activeSessionsKey, 0, expirationTime);
+                Set<String> expiredMembers =
+                        redisTemplate.opsForZSet().rangeByScore(activeSessionsKey, 0, expirationTime);
                 if (expiredMembers != null && !expiredMembers.isEmpty()) {
                     redisTemplate.opsForZSet().removeRangeByScore(activeSessionsKey, 0, expirationTime);
-                    
                     int expiredCount = expiredMembers.size();
                     totalTimeouts += expiredCount;
-                    
                     logger.info("[{}] 만료된 활성 세션 {}개를 정리했습니다.", activeSessionsKey, expiredCount);
-
+                    
                     // 타임아웃 알림 전송
                     expiredMembers.forEach(member -> {
                         if (member.contains(":")) {
-                            String requestId = member.split(":")[0];
+                            String requestId = member.split(":", 2)[0];
                             webSocketUpdateService.notifyTimeout(requestId);
                         }
                     });
-
-                    // ★★★ 3단계: 메트릭 기록 ★★★
+                    
+                    // 메트릭 기록
                     metricsService.recordTimeout(movieId, expiredCount);
-
+                    
                     // 최적화된 배치 입장 처리
                     int admittedCount = admitNextUsersOptimized(movieId, expiredCount);
                     totalAdmissions += admittedCount;
@@ -107,19 +117,16 @@ public class SessionTimeoutProcessor {
         } catch (Exception e) {
             logger.error("만료된 세션 정리 및 다음 사용자 입장 처리 중 오류 발생", e);
         }
-
-        // ★★★ 3단계: Pod 부하 업데이트 & 성능 메트릭 기록 ★★★
-        long processingTime = System.currentTimeMillis() - startTime;
         
+        // Pod 부하 업데이트 & 성능 메트릭 기록
+        long processingTime = System.currentTimeMillis() - startTime;
         if (totalProcessedMovies > 0) {
             loadBalancer.updatePodLoad(totalProcessedMovies);
-            
             if (totalAdmissions > 0) {
                 metricsService.recordEntry("batch", totalAdmissions, processingTime);
             }
-            
-            logger.debug("배치 처리 완료 - 처리 영화: {}, 타임아웃: {}, 입장: {}, 소요시간: {}ms", 
-                totalProcessedMovies, totalTimeouts, totalAdmissions, processingTime);
+            logger.debug("배치 처리 완료 - 처리 영화: {}, 타임아웃: {}, 입장: {}, 소요시간: {}ms",
+                    totalProcessedMovies, totalTimeouts, totalAdmissions, processingTime);
         }
     }
 
