@@ -5,13 +5,17 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 
@@ -97,15 +101,25 @@ public class AdmissionService {
         return Math.max(0, max - current);
     }
     
+    /**
+     * [오류 수정] KEYS 대신 SCAN을 사용하여 모든 활성 대기열의 영화 ID를 안전하게 가져옵니다.
+     */
     public Set<String> getActiveQueueMovieIds() {
-        Set<String> keys = redisTemplate.keys("waiting_queue:movie:*");
-        if (keys == null || keys.isEmpty()) {
-            return Collections.emptySet();
-        }
         Set<String> movieIds = new HashSet<>();
-        for (String key : keys) {
-            movieIds.add(key.substring("waiting_queue:movie:".length()));
-        }
+        // 'SCAN'은 커서를 사용하므로, 모든 키를 다 찾을 때까지 반복해야 합니다.
+        redisTemplate.execute((RedisConnection connection) -> {
+            try (Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions()
+                    .match("waiting_queue:movie:*") // 이 패턴과 일치하는 키를 찾습니다.
+                    .count(100) // 한 번에 100개씩 스캔합니다.
+                    .build())) {
+
+                while (cursor.hasNext()) {
+                    String key = new String(cursor.next(), StandardCharsets.UTF_8);
+                    movieIds.add(key.substring("waiting_queue:movie:".length()));
+                }
+            }
+            return null;
+        });
         return movieIds;
     }
     
@@ -126,12 +140,10 @@ public class AdmissionService {
             "redis.call('zremrangebyrank', KEYS[1], 0, #members-1); " +
             "return result; ";
         
-        // [오류 수정] 제네릭 타입을 List.class로 명확히 지정합니다.
         RedisScript<List> redisScript = new DefaultRedisScript<>(script, List.class);
         
         try {
             long sessionTimeout = 30;
-            // [오류 수정] 실행 결과를 List<String>으로 캐스팅합니다.
             List<String> admittedMembers = (List<String>) redisTemplate.execute(redisScript,
                     List.of(waitingQueueKey, activeSessionsKey, activeUsersKey),
                     String.valueOf(count),
