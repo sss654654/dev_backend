@@ -29,9 +29,9 @@ build-sonar:
       - "${SONAR_USER_HOME}/cache"
       - sonar-scanner/
   script:
-    - echo "=== Running SonarQube Analysis ==="
-    - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=$SONAR_TOKEN
-  allow_failure: true  # 실패해도 파이프라인 계속 진행
+    - mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+  allow_failure: true
+
 
 owasp_dependency_check:
   image:
@@ -69,7 +69,7 @@ ecr-login:
     entrypoint: [""]
   script:
     - echo "=== Getting ECR Login Token ==="
-    - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
+    - aws ecr get-login-password --region $PROD_REGION > ecr_token.txt
   artifacts:
     paths:
       - ecr_token.txt
@@ -111,63 +111,63 @@ docker-build-separate:
     paths:
       - tag.txt
 
-# ★★★ Dev 환경 배포 (main 브랜치) ★★★
-deploy-to-dev:
-  stage: deploy
-  image:
-    name: alpine/k8s:1.28.2
-  needs:
-    - job: docker-build-separate
-      artifacts: true
-  script:
-    - |
-      echo "=== Deploying to Development Environment ==="
-      cd ..
-      pwd && ls -la
-      git config --global user.email "gitlab-ci@example.com"
-      git config --global user.name "subin"
-      export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
-      echo "Applying new tag to dev: $NEW_TAG"
+# # ★★★ Dev 환경 배포 (main 브랜치) ★★★
+# deploy-to-dev:
+#   stage: deploy
+#   image:
+#     name: alpine/k8s:1.28.2
+#   needs:
+#     - job: docker-build-separate
+#       artifacts: true
+#   script:
+#     - |
+#       echo "=== Deploying to Development Environment ==="
+#       cd ..
+#       pwd && ls -la
+#       git config --global user.email "gitlab-ci@example.com"
+#       git config --global user.name "subin"
+#       export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
+#       echo "Applying new tag to dev: $NEW_TAG"
       
-      # Dev 환경에서는 values-dev.yaml 파일을 업데이트
-      sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-dev.yaml
+#       # Dev 환경에서는 values-dev.yaml 파일을 업데이트
+#       sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-dev.yaml
       
-      git add values-dev.yaml
-      git commit -m "🔧 ci: Update dev image tag to $NEW_TAG"
-      git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
+#       git add values-dev.yaml
+#       git commit -m "🔧 ci: Update dev image tag to $NEW_TAG"
+#       git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
       
-      echo "✅ Development deployment completed"
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+#       echo "✅ Development deployment completed"
+#   rules:
+#     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# ★★★ Production 환경 배포 (production 브랜치) ★★★
-deploy-to-production:
-  stage: deploy
-  image:
-    name: alpine/k8s:1.28.2
-  needs:
-    - job: docker-build-separate
-      artifacts: true
-  script:
-    - |
-      echo "=== Deploying to Production Environment ==="
-      cd ..
-      pwd && ls -la
-      git config --global user.email "gitlab-ci@example.com"
-      git config --global user.name "subin"
-      export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
-      echo "Applying new tag to production: $NEW_TAG"
+# # ★★★ Production 환경 배포 (production 브랜치) ★★★
+# deploy-to-production:
+#   stage: deploy
+#   image:
+#     name: alpine/k8s:1.28.2
+#   needs:
+#     - job: docker-build-separate
+#       artifacts: true
+#   script:
+#     - |
+#       echo "=== Deploying to Production Environment ==="
+#       cd ..
+#       pwd && ls -la
+#       git config --global user.email "gitlab-ci@example.com"
+#       git config --global user.name "subin"
+#       export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
+#       echo "Applying new tag to production: $NEW_TAG"
       
-      # Production 환경에서는 values-prod.yaml 파일을 업데이트
-      sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-prod.yaml
+#       # Production 환경에서는 values-prod.yaml 파일을 업데이트
+#       sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-prod.yaml
       
-      git add values-prod.yaml
-      git commit -m "🚀 ci: Update production image tag to $NEW_TAG"
-      git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
+#       git add values-prod.yaml
+#       git commit -m "🚀 ci: Update production image tag to $NEW_TAG"
+#       git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
       
-      echo "✅ Production deployment completed"
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "production"'
+#       echo "✅ Production deployment completed"
+#   rules:
+#     - if: '$CI_COMMIT_BRANCH == "production"'
 
 notify-success:
   stage: notify
