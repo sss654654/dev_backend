@@ -67,7 +67,7 @@ ecr-login:
     entrypoint: [""]
   script:
     - echo "=== Getting ECR Login Token ==="
-    - aws ecr get-login-password --region $PROD_REGION > ecr_token.txt
+    - aws ecr get-login-password --region $DEV_REGION > ecr_token.txt
   artifacts:
     paths:
       - ecr_token.txt
@@ -93,37 +93,79 @@ docker-build-separate:
     - echo "=== Building and Pushing Image ==="
     - export TAG=$(date +%y%m%d-%H%M%S)
     - echo "$VER-$TAG" > tag.txt
-    - docker build -t "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG" -t "$ECR_NAMESPACE/$ECR_REPO:latest" .
-    - docker push "$ECR_NAMESPACE/$ECR_REPO:$VER-$TAG"
-    - docker push "$ECR_NAMESPACE/$ECR_REPO:latest"
+    - |
+      # 브랜치별 다른 ECR 리포지토리 사용
+      if [ "$CI_COMMIT_BRANCH" = "production" ]; then
+        REPO_NAME="prod-cgv-api"
+      else
+        REPO_NAME="dev-gitlab-repo"
+      fi
+      echo "Using repository: $REPO_NAME"
+    - docker build -t "$ECR_NAMESPACE/$REPO_NAME:$VER-$TAG" -t "$ECR_NAMESPACE/$REPO_NAME:latest" .
+    - docker push "$ECR_NAMESPACE/$REPO_NAME:$VER-$TAG"
+    - docker push "$ECR_NAMESPACE/$REPO_NAME:latest"
     - echo "=== Complete ==="
   artifacts:
     paths:
       - tag.txt
 
+# ★★★ Dev 환경 배포 (main 브랜치) ★★★
+deploy-to-dev:
+  stage: deploy
+  image:
+    name: alpine/k8s:1.28.2
+  needs:
+    - job: docker-build-separate
+      artifacts: true
+  script:
+    - |
+      echo "=== Deploying to Development Environment ==="
+      cd ..
+      pwd && ls -la
+      git config --global user.email "gitlab-ci@example.com"
+      git config --global user.name "subin"
+      export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
+      echo "Applying new tag to dev: $NEW_TAG"
+      
+      # Dev 환경에서는 values-dev.yaml 파일을 업데이트
+      sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-dev.yaml
+      
+      git add values-dev.yaml
+      git commit -m "🔧 ci: Update dev image tag to $NEW_TAG"
+      git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
+      
+      echo "✅ Development deployment completed"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
-#deploy-to-dev:
-#  stage: deploy
-#  image:
-#    name: alpine/k8s:1.28.2
- # needs:
-  #  - job: docker-build-separate
-   #   artifacts: true
-#  script:
-#    - |
-#      echo "=== Cloning Manifest Repository ==="
-#      cd ..
-#      pwd && ls -la
-#      git config --global user.email "gitlab-ci@example.com"
-#      git config --global user.name "subin"
-#      export NEW_TAG=$(cat tag.txt)
-#      echo "Applying new tag: $NEW_TAG"
-#      sed -i "s/tag: .*/tag: \"$NEW_TAG\"/" values-dev.yaml
-#      git add values-dev.yaml
-#      git commit -m "ci: Update image tag to $NEW_TAG for cgv-api-platform"
-#      git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
-#  rules:
-#    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "production"'
+# ★★★ Production 환경 배포 (production 브랜치) ★★★
+deploy-to-production:
+  stage: deploy
+  image:
+    name: alpine/k8s:1.28.2
+  needs:
+    - job: docker-build-separate
+      artifacts: true
+  script:
+    - |
+      echo "=== Deploying to Production Environment ==="
+      cd ..
+      pwd && ls -la
+      git config --global user.email "gitlab-ci@example.com"
+      git config --global user.name "subin"
+      export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
+      echo "Applying new tag to production: $NEW_TAG"
+      
+      # Production 환경에서는 values-prod.yaml 파일을 업데이트
+      sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-prod.yaml
+      
+      git add values-prod.yaml
+      git commit -m "🚀 ci: Update production image tag to $NEW_TAG"
+      git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
+      
+      echo "✅ Production deployment completed"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "production"'
 
 notify-success:
   stage: notify
@@ -132,8 +174,16 @@ notify-success:
     - apk add --no-cache curl
   script:
     - |
+      if [ "$CI_COMMIT_BRANCH" = "production" ]; then
+        ENVIRONMENT="🚀 PRODUCTION"
+        EMOJI="🎉"
+      else
+        ENVIRONMENT="🔧 DEVELOPMENT"
+        EMOJI="✅"
+      fi
+      
       curl -X POST -H 'Content-type: application/json' \
-      --data "{\"text\": \"✅ GitLab CI completed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
+      --data "{\"text\": \"$EMOJI GitLab CI completed for $PROJECT_NAME ($ENVIRONMENT - $CI_COMMIT_REF_NAME)\"}" \
       $SLACK_WEBHOOK_URL
   rules:
     - when: on_success
@@ -145,8 +195,16 @@ notify-failure:
     - apk add --no-cache curl
   script:
     - |
+      if [ "$CI_COMMIT_BRANCH" = "production" ]; then
+        ENVIRONMENT="🚀 PRODUCTION"
+        EMOJI="💥"
+      else
+        ENVIRONMENT="🔧 DEVELOPMENT"
+        EMOJI="❌"
+      fi
+      
       curl -X POST -H 'Content-type: application/json' \
-      --data "{\"text\": \"❌ GitLab CI failed for $CI_PROJECT_NAME ($CI_COMMIT_REF_NAME)\"}" \
+      --data "{\"text\": \"$EMOJI GitLab CI failed for $PROJECT_NAME ($ENVIRONMENT - $CI_COMMIT_REF_NAME)\"}" \
       $SLACK_WEBHOOK_URL
   rules:
     - when: on_failure
