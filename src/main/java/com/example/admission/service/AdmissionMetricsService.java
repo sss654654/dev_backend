@@ -146,15 +146,23 @@ public class AdmissionMetricsService {
 
     private long getAllActiveSessionsCount() {
         try {
-            Set<String> keys = redisTemplate.keys("active_sessions:movie:*");
-            if (keys == null) return 0;
+            // KEYS 대신 SCAN 사용 (ElastiCache Serverless 호환)
+            org.springframework.data.redis.core.ScanOptions options = 
+                org.springframework.data.redis.core.ScanOptions.scanOptions()
+                    .match("active_sessions:movie:*")
+                    .count(100)
+                    .build();
             
-            return keys.stream()
-                .mapToLong(key -> {
+            long totalCount = 0;
+            try (org.springframework.data.redis.core.Cursor<String> cursor = redisTemplate.scan(options)) {
+                while (cursor.hasNext()) {
+                    String key = cursor.next();
                     Long count = redisTemplate.opsForZSet().zCard(key);
-                    return count != null ? count : 0;
-                })
-                .sum();
+                    totalCount += count != null ? count : 0;
+                }
+            }
+            
+            return totalCount;
         } catch (Exception e) {
             logger.error("활성 세션 수 계산 중 오류", e);
             return 0;
@@ -163,15 +171,23 @@ public class AdmissionMetricsService {
 
     private long getAllWaitingCount() {
         try {
-            Set<String> keys = redisTemplate.keys("waiting_queue:movie:*");
-            if (keys == null) return 0;
+            // KEYS 대신 SCAN 사용 (ElastiCache Serverless 호환)
+            org.springframework.data.redis.core.ScanOptions options = 
+                org.springframework.data.redis.core.ScanOptions.scanOptions()
+                    .match("waiting_queue:movie:*")
+                    .count(100)
+                    .build();
             
-            return keys.stream()
-                .mapToLong(key -> {
+            long totalCount = 0;
+            try (org.springframework.data.redis.core.Cursor<String> cursor = redisTemplate.scan(options)) {
+                while (cursor.hasNext()) {
+                    String key = cursor.next();
                     Long count = redisTemplate.opsForZSet().zCard(key);
-                    return count != null ? count : 0;
-                })
-                .sum();
+                    totalCount += count != null ? count : 0;
+                }
+            }
+            
+            return totalCount;
         } catch (Exception e) {
             logger.error("대기자 수 계산 중 오류", e);
             return 0;
