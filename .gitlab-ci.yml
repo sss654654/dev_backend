@@ -151,22 +151,20 @@ deploy-to-production:
   script:
     - |
       echo "=== Deploying to Production Environment ==="
-      pwd && ls -la
       git config --global user.email "gitlab-ci@example.com"
       git config --global user.name "subin"
-      export NEW_TAG=$(cat $CI_PROJECT_DIR/tag.txt)
+      export NEW_TAG=$(cat tag.txt)
       echo "Applying new tag to production: $NEW_TAG"
       
-      # Production 환경에서는 values-prod.yaml 파일을 업데이트
+      # values-prod.yaml의 tag를 latest가 아닌 구체적인 태그로 업데이트
       sed -i "s/tag: \".*\"/tag: \"$NEW_TAG\"/" values-prod.yaml
       
       git add values-prod.yaml
       git commit -m "🚀 ci: Update production image tag to $NEW_TAG"
       git push "https://oauth2:${GIT_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:$CI_COMMIT_BRANCH
-      
-      echo "✅ Production deployment completed"
   rules:
     - if: '$CI_COMMIT_BRANCH == "production"'
+
 
 notify-success:
   stage: notify
