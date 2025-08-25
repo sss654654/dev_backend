@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 🔹 개선된 로깅 설정 - Kinesis 및 대기열 시스템 중심 -->
+
+    <!-- Console Appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- File Appender for General Logs -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/application.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/application-%d{yyyy-MM-dd}-%i.log</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{50}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 🚨 핵심: Kinesis 전용 로그 파일 -->
+    <appender name="KINESIS_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/kinesis.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/kinesis-%d{yyyy-MM-dd}-%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{30}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 🚨 핵심: 대기열 시스템 전용 로그 파일 -->
+    <appender name="ADMISSION_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/admission.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/admission-%d{yyyy-MM-dd}-%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{30}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 🚨 핵심: WebSocket 전용 로그 파일 -->
+    <appender name="WEBSOCKET_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/websocket.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/websocket-%d{yyyy-MM-dd}-%i.log</fileNamePattern>
+            <maxFileSize>30MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>300MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{25}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Error 전용 로그 파일 -->
+    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/error.log</file>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/error-%d{yyyy-MM-dd}-%i.log</fileNamePattern>
+            <maxFileSize>20MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{50}] - %msg%n%ex</pattern>
+        </encoder>
+    </appender>
+
+    <!-- =================================================================== -->
+    <!-- 🚨 핵심 로거 설정 - 각 컴포넌트별 세분화된 로깅 레벨 -->
+    <!-- =================================================================== -->
+
+    <!-- Kinesis Producer 로그 (상세 로깅) -->
+    <logger name="com.example.admission.KinesisAdmissionProducer" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="KINESIS_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- Kinesis Consumer 로그 (상세 로깅) -->
+    <logger name="com.example.admission.KinesisAdmissionConsumer" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="KINESIS_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- Admission Service 로그 -->
+    <logger name="com.example.admission.service.AdmissionService" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ADMISSION_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- Queue Processor 로그 -->
+    <logger name="com.example.admission.QueueProcessor" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ADMISSION_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- WebSocket 서비스 로그 -->
+    <logger name="com.example.admission.ws.WebSocketUpdateService" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="WEBSOCKET_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- 전체 admission 패키지 로그 -->
+    <logger name="com.example.admission" level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ADMISSION_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- AWS Kinesis SDK 로그 (에러만) -->
+    <logger name="software.amazon.awssdk.services.kinesis" level="WARN" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="KINESIS_FILE"/>
+    </logger>
+
+    <!-- AWS SDK 일반 로그 (에러만) -->
+    <logger name="software.amazon.awssdk" level="WARN" additivity="false">
+        <appender-ref ref="FILE"/>
+    </logger>
+
+    <!-- Spring WebSocket 로그 -->
+    <logger name="org.springframework.web.socket" level="DEBUG" additivity="false">
+        <appender-ref ref="WEBSOCKET_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- Spring Messaging 로그 -->
+    <logger name="org.springframework.messaging" level="DEBUG" additivity="false">
+        <appender-ref ref="WEBSOCKET_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- Redis 관련 로그 -->
+    <logger name="org.springframework.data.redis" level="WARN" additivity="false">
+        <appender-ref ref="FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </logger>
+
+    <!-- Lettuce Redis Client 로그 -->
+    <logger name="io.lettuce.core" level="WARN" additivity="false">
+        <appender-ref ref="FILE"/>
+    </logger>
+
+    <!-- HTTP Request/Response 로그 (개발 환경) -->
+    <springProfile name="local,dev">
+        <logger name="org.springframework.web.servlet.DispatcherServlet" level="DEBUG" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+        </logger>
+        
+        <!-- Root 로거 (개발 환경에서는 DEBUG) -->
+        <root level="DEBUG">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- 운영 환경 로그 설정 -->
+    <springProfile name="prod,production">
+        <!-- Kinesis 운영 로그 (INFO 이상) -->
+        <logger name="com.example.admission.KinesisAdmissionProducer" level="INFO"/>
+        <logger name="com.example.admission.KinesisAdmissionConsumer" level="INFO"/>
+        
+        <!-- Root 로거 (운영 환경에서는 INFO) -->
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- 기본 Root 로거 (프로필 없을 때) -->
+    <springProfile name="!local & !dev & !prod & !production">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- =================================================================== -->
+    <!-- 🔹 성능 최적화를 위한 비동기 로깅 설정 (선택사항) -->
+    <!-- =================================================================== -->
+    
+    <!-- 비동기 Appender for High-Performance Logging -->
+    <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="CONSOLE"/>
+        <queueSize>1000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <appender name="ASYNC_KINESIS" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="KINESIS_FILE"/>
+        <queueSize>2000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <!-- 고성능 환경을 위한 비동기 로깅 활성화 -->
+    <springProfile name="high-performance">
+        <logger name="com.example.admission.KinesisAdmissionProducer" level="INFO" additivity="false">
+            <appender-ref ref="ASYNC_CONSOLE"/>
+            <appender-ref ref="ASYNC_KINESIS"/>
+        </logger>
+        
+        <logger name="com.example.admission.KinesisAdmissionConsumer" level="INFO" additivity="false">
+            <appender-ref ref="ASYNC_CONSOLE"/>
+            <appender-ref ref="ASYNC_KINESIS"/>
+        </logger>
+    </springProfile>
+
+</configuration>

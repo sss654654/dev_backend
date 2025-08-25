@@ -1,93 +1,224 @@
 package com.example.admission.service;
 
 import com.example.admission.dto.EnterResponse;
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class AdmissionService {
-
     private static final Logger logger = LoggerFactory.getLogger(AdmissionService.class);
-
-    private static final String ACTIVE_MOVIES  = "active_movies";
-    private static final String WAITING_MOVIES = "waiting_movies";
-
-    @Value("${admission.max-active-sessions:2}")
-    private long fallbackMaxActiveSessions;
-
-    @Value("${admission.session-timeout-seconds:30}")
-    private long sessionTimeoutSeconds;
-
+    
     private final RedisTemplate<String, String> redisTemplate;
-    private final com.example.admission.service.DynamicSessionCalculator sessionCalculator;
-
-    private ZSetOperations<String, String> zSetOps;
-    private SetOperations<String, String> setOps;
+    private final SetOperations<String, String> setOps;
+    private final ZSetOperations<String, String> zSetOps;
+    private final DynamicSessionCalculator sessionCalculator;
+    
+    // Redis Keys
+    private static final String ACTIVE_MOVIES = "active_movies";
+    private static final String WAITING_MOVIES = "waiting_movies";
+    private static final String SESSION_EXPIRY_KEY = "session_expiry:";
 
     public AdmissionService(RedisTemplate<String, String> redisTemplate,
-                            com.example.admission.service.DynamicSessionCalculator sessionCalculator) {
+                          DynamicSessionCalculator sessionCalculator) {
         this.redisTemplate = redisTemplate;
+        this.setOps = redisTemplate.opsForSet();
+        this.zSetOps = redisTemplate.opsForZSet();
         this.sessionCalculator = sessionCalculator;
     }
 
-    @PostConstruct
-    public void init() {
-        this.zSetOps = redisTemplate.opsForZSet();
-        this.setOps = redisTemplate.opsForSet();
-        logCurrentConfiguration();
-    }
-
-    public EnterResponse tryEnter(String type, String id, String sessionId, String requestId) {
-        String activeSessionsKey = activeSessionsKey(type, id); // SET
-        String waitingQueueKey   = waitingQueueKey(type, id);   // ZSET
-        String activeUsersPrefix = activeUsersPrefix(type, id); // STRING TTL prefix
+    /**
+     * 🔹 핵심 메서드: enter (기존 tryEnter에서 이름 변경)
+     */
+    public EnterResponse enter(String type, String id, String sessionId, String requestId) {
+        String activeSessionsKey = activeSessionsKey(type, id);
+        String waitingQueueKey = waitingQueueKey(type, id);
         String member = requestId + ":" + sessionId;
 
-        long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
-        Long currentActiveSessions = setOps.size(activeSessionsKey);
-        if (currentActiveSessions == null) currentActiveSessions = 0L;
+        // 1. 현재 활성 세션 수 정확히 계산
+        long currentActiveSessions = getCurrentActiveSessionCount(activeSessionsKey);
+        long maxSessions = sessionCalculator.calculateMaxActiveSessions(); // ✅ 올바른 메서드명
+        
+        logger.info("[{}] 입장 요청 - 현재 활성세션: {}/{}, 요청자: {}", 
+                   id, currentActiveSessions, maxSessions, requestId);
 
-        if (currentActiveSessions < maxActiveSessions) {
-            // 즉시 입장
+        // 2. 정확히 빈자리가 있을 때만 즉시 입장
+        if (currentActiveSessions < maxSessions) {
+            // 즉시 입장 허가
             setOps.add(activeSessionsKey, member);
-            redisTemplate.opsForValue().set(activeUsersPrefix + member, "1", Duration.ofSeconds(sessionTimeoutSeconds));
-
-            // 🔹 인덱스 갱신
+            
+            // 세션 만료 시간 설정 (30초)
+            String sessionExpiryKey = SESSION_EXPIRY_KEY + requestId;
+            redisTemplate.opsForValue().set(sessionExpiryKey, 
+                String.valueOf(System.currentTimeMillis() + 30000), 30, TimeUnit.SECONDS);
+            
             redisTemplate.opsForSet().add(ACTIVE_MOVIES, id);
-
-            logger.info("[{}] 즉시 입장 성공: {}/{}", id, currentActiveSessions + 1, maxActiveSessions);
-            return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장되었습니다.", requestId, null, null);
+            
+            logger.info("[{}] 즉시 입장 허가 - 활성세션: {}/{}", 
+                       id, currentActiveSessions + 1, maxSessions);
+            
+            return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장이 허가되었습니다.",
+                    requestId, null, null);
         } else {
             // 대기열 등록
             double score = Instant.now().toEpochMilli();
             zSetOps.add(waitingQueueKey, member, score);
-
-            // 🔹 인덱스 갱신
             redisTemplate.opsForSet().add(WAITING_MOVIES, id);
 
             Long myRank = zSetOps.rank(waitingQueueKey, member);
             Long totalWaiting = zSetOps.zCard(waitingQueueKey);
 
-            logger.info("[{}] 대기열 등록: 순위 {}/{}", id, myRank != null ? myRank + 1 : "?", totalWaiting);
+            logger.info("[{}] 대기열 등록 - 순위: {}/{}, 활성세션 포화상태: {}/{}", 
+                       id, myRank != null ? myRank + 1 : "?", totalWaiting, currentActiveSessions, maxSessions);
+            
             return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.",
                     requestId, myRank != null ? myRank + 1 : null, totalWaiting);
         }
     }
 
+    /**
+     * 🔹 정확한 활성 세션 수 계산 (만료된 세션 자동 제거)
+     */
+    private long getCurrentActiveSessionCount(String activeSessionsKey) {
+        Set<String> allMembers = setOps.members(activeSessionsKey);
+        if (allMembers == null || allMembers.isEmpty()) {
+            return 0;
+        }
+
+        long validSessionCount = 0;
+        Set<String> expiredMembers = new HashSet<>();
+        
+        for (String member : allMembers) {
+            String[] parts = member.split(":");
+            if (parts.length >= 1) {
+                String requestId = parts[0];
+                String sessionExpiryKey = SESSION_EXPIRY_KEY + requestId;
+                
+                // 세션 만료 확인
+                String expiryTime = redisTemplate.opsForValue().get(sessionExpiryKey);
+                if (expiryTime == null || System.currentTimeMillis() > Long.parseLong(expiryTime)) {
+                    // 만료된 세션 - 제거 대상에 추가
+                    expiredMembers.add(member);
+                    logger.info("만료된 세션 발견: {}", requestId);
+                } else {
+                    validSessionCount++;
+                }
+            }
+        }
+        
+        // 만료된 세션들을 Redis에서 제거
+        if (!expiredMembers.isEmpty()) {
+            setOps.remove(activeSessionsKey, expiredMembers.toArray());
+            logger.info("만료된 세션 {}개 정리 완료", expiredMembers.size());
+        }
+        
+        return validSessionCount;
+    }
+
+    /**
+     * 🔹 배치 단위로 대기열에서 사용자 입장 처리
+     */
+    public Map<String, String> admitUsersFromQueue(String type, String id, long batchSize) {
+        String activeSessionsKey = activeSessionsKey(type, id);
+        String waitingQueueKey = waitingQueueKey(type, id);
+        
+        Map<String, String> resultMap = new HashMap<>();
+        
+        try {
+            // 1. 현재 실제 빈 자리 수 확인
+            long currentActive = getCurrentActiveSessionCount(activeSessionsKey);
+            long maxSessions = sessionCalculator.calculateMaxActiveSessions(); // ✅ 올바른 메서드명
+            long actualVacantSlots = maxSessions - currentActive;
+            
+            if (actualVacantSlots <= 0) {
+                logger.debug("[{}] 빈자리 없음 - 현재: {}/{}", id, currentActive, maxSessions);
+                return Collections.emptyMap();
+            }
+            
+            // 2. 실제 처리 가능한 수만큼만 대기열에서 가져오기
+            long processCount = Math.min(batchSize, Math.min(actualVacantSlots, 
+                                                           zSetOps.zCard(waitingQueueKey)));
+            
+            if (processCount <= 0) {
+                return Collections.emptyMap();
+            }
+
+            // 3. 대기열에서 순서대로 사용자 선택
+            Set<String> candidates = zSetOps.range(waitingQueueKey, 0, processCount - 1);
+            if (candidates == null || candidates.isEmpty()) {
+                return Collections.emptyMap();
+            }
+
+            List<String> admitted = new ArrayList<>();
+            
+            // 4. 각 사용자를 활성 세션으로 이동
+            for (String member : candidates) {
+                String[] parts = member.split(":");
+                if (parts.length >= 2) {
+                    String requestId = parts[0];
+                    String sessionId = parts[1];
+                    
+                    // 활성 세션에 추가
+                    setOps.add(activeSessionsKey, member);
+                    
+                    // 세션 만료 시간 설정
+                    String sessionExpiryKey = SESSION_EXPIRY_KEY + requestId;
+                    redisTemplate.opsForValue().set(sessionExpiryKey, 
+                        String.valueOf(System.currentTimeMillis() + 30000), 30, TimeUnit.SECONDS);
+                    
+                    admitted.add(member);
+                    resultMap.put(requestId, sessionId);
+                }
+            }
+
+            // 5. 대기열에서 제거
+            if (!admitted.isEmpty()) {
+                zSetOps.remove(waitingQueueKey, admitted.toArray());
+                redisTemplate.opsForSet().add(ACTIVE_MOVIES, id);
+
+                Long remain = zSetOps.zCard(waitingQueueKey);
+                if (remain == null || remain == 0) {
+                    redisTemplate.opsForSet().remove(WAITING_MOVIES, id);
+                }
+
+                logger.info("[{}] 대기열에서 {}명을 활성세션으로 이동 완료 - 현재 활성: {}/{}", 
+                           id, admitted.size(), getCurrentActiveSessionCount(activeSessionsKey), maxSessions);
+            }
+
+            return resultMap;
+        } catch (Exception e) {
+            logger.error("대기열에서 사용자 입장 처리 중 오류 발생", e);
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * 빈 자리 수 정확히 계산
+     */
+    public long getVacantSlots(String type, String id) {
+        long currentActive = getCurrentActiveSessionCount(activeSessionsKey(type, id));
+        long maxSessions = sessionCalculator.calculateMaxActiveSessions(); // ✅ 올바른 메서드명
+        return Math.max(0, maxSessions - currentActive);
+    }
+
+    /**
+     * 사용자 퇴장 처리
+     */
     public void leave(String type, String id, String sessionId, String requestId) {
         String activeSessionsKey = activeSessionsKey(type, id);
-        String waitingQueueKey   = waitingQueueKey(type, id);
+        String waitingQueueKey = waitingQueueKey(type, id);
         String member = requestId + ":" + sessionId;
+
+        // 세션 만료 키도 함께 삭제
+        String sessionExpiryKey = SESSION_EXPIRY_KEY + requestId;
+        redisTemplate.delete(sessionExpiryKey);
 
         if (Boolean.TRUE.equals(setOps.isMember(activeSessionsKey, member))) {
             setOps.remove(activeSessionsKey, member);
@@ -108,94 +239,51 @@ public class AdmissionService {
         }
     }
 
+    /**
+     * 모든 대기 중인 사용자의 순위 조회
+     */
+    public Map<String, Long> getAllUserRanks(String type, String id) {
+        String waitingQueueKey = waitingQueueKey(type, id);
+        Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
+        if (members == null || members.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        
+        Map<String, Long> userRanks = new HashMap<>();
+        long rank = 1;
+        for (String member : members) {
+            int idx = member.indexOf(':');
+            if (idx > 0) {
+                String requestId = member.substring(0, idx);
+                userRanks.put(requestId, rank++);
+            }
+        }
+        return userRanks;
+    }
+
     public long getTotalWaitingCount(String type, String id) {
         Long count = zSetOps.zCard(waitingQueueKey(type, id));
         return count != null ? count : 0;
     }
 
     public long getActiveSessionCount(String type, String id) {
-        Long count = setOps.size(activeSessionsKey(type, id));
-        return count != null ? count : 0;
+        return getCurrentActiveSessionCount(activeSessionsKey(type, id));
     }
 
-    public long getVacantSlots(String type, String id) {
-        long max = sessionCalculator.calculateMaxActiveSessions();
-        long current = getActiveSessionCount(type, id);
-        return Math.max(0, max - current);
-    }
-
-    // 🔹 SCAN 제거: 인덱스 기반으로 활성 대기열 영화 목록 조회
+    /**
+     * 🔹 새로운 메서드: 대기열이 있는 모든 영화 ID 조회
+     */
     public Set<String> getActiveQueueMovieIds() {
-        Set<String> ids = redisTemplate.opsForSet().members(WAITING_MOVIES);
-        if (ids == null || ids.isEmpty()) return Collections.emptySet();
-
-        // 인덱스 정합성 자가치유(옵션): 대기열이 비면 인덱스에서 제거
-        Set<String> valid = new HashSet<>();
-        for (String id : ids) {
-            Long z = redisTemplate.opsForZSet().zCard(waitingQueueKey("movie", id));
-            if (z != null && z > 0) {
-                valid.add(id);
-            } else {
-                redisTemplate.opsForSet().remove(WAITING_MOVIES, id);
-            }
-        }
-        return valid;
+        Set<String> waitingMovies = redisTemplate.opsForSet().members(WAITING_MOVIES);
+        return waitingMovies != null ? waitingMovies : Collections.emptySet();
     }
 
-    // 🔹 Lua 제거: 개별 명령으로 이동 + 인덱스 갱신
-    public Map<String, String> admitUsersFromQueue(String type, String id, long count) {
-        String waitingQueueKey = waitingQueueKey(type, id);
-        String activeSessionsKey = activeSessionsKey(type, id);
-        String activeUsersPrefix = activeUsersPrefix(type, id);
+    private String activeSessionsKey(String type, String id) {
+        return "active_sessions:" + type + ":" + id;
+    }
 
-        try {
-            if (count <= 0) return Collections.emptyMap();
-
-            long end = count - 1;
-            Set<String> membersToAdmit = zSetOps.range(waitingQueueKey, 0, end);
-            if (membersToAdmit == null || membersToAdmit.isEmpty()) {
-                return Collections.emptyMap();
-            }
-
-            Map<String, String> resultMap = new HashMap<>();
-            List<String> admitted = new ArrayList<>();
-
-            for (String member : membersToAdmit) {
-                try {
-                    setOps.add(activeSessionsKey, member);
-                    redisTemplate.opsForValue().set(activeUsersPrefix + member, "1",
-                            Duration.ofSeconds(sessionTimeoutSeconds));
-
-                    int idx = member.indexOf(':');
-                    if (idx > 0) {
-                        String requestId = member.substring(0, idx);
-                        String sessionId = member.substring(idx + 1);
-                        resultMap.put(requestId, sessionId);
-                    }
-                    admitted.add(member);
-                } catch (Exception e) {
-                    logger.warn("[{}] 사용자 입장 처리 중 오류 ({}): {}", id, member, e.getMessage());
-                }
-            }
-
-            if (!admitted.isEmpty()) {
-                zSetOps.remove(waitingQueueKey, admitted.toArray());
-                // 🔹 인덱스 갱신
-                redisTemplate.opsForSet().add(ACTIVE_MOVIES, id);
-
-                Long remain = zSetOps.zCard(waitingQueueKey);
-                if (remain == null || remain == 0) {
-                    redisTemplate.opsForSet().remove(WAITING_MOVIES, id);
-                }
-
-                logger.info("[{}] 대기열에서 {}명을 활성세션으로 이동 완료", id, admitted.size());
-            }
-
-            return resultMap;
-        } catch (Exception e) {
-            logger.error("대기열에서 사용자 입장 처리 중 오류 발생", e);
-            return Collections.emptyMap();
-        }
+    private String waitingQueueKey(String type, String id) {
+        return "waiting_queue:" + type + ":" + id;
     }
 
     public void logCurrentConfiguration() {
@@ -214,40 +302,7 @@ public class AdmissionService {
         }
     }
 
-    public com.example.admission.service.DynamicSessionCalculator.SessionCalculationInfo getConfiguration() {
+    public DynamicSessionCalculator.SessionCalculationInfo getConfiguration() {
         return sessionCalculator.getCalculationInfo();
     }
-
-    private String activeSessionsKey(String type, String id) {
-        return "active_sessions:" + type + ":" + id;
-    }
-
-    private String waitingQueueKey(String type, String id) {
-        return "waiting_queue:" + type + ":" + id;
-    }
-
-    private String activeUsersPrefix(String type, String id) {
-        return "active_users:" + type + ":" + id + ":";
-    }
-
-
-    // AdmissionService.java 내부에 추가
-    public Map<String, Long> getAllUserRanks(String type, String id) {
-        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
-        Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
-        if (members == null || members.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Map<String, Long> userRanks = new HashMap<>();
-        long rank = 1;
-        for (String member : members) {
-            int idx = member.indexOf(':');
-            if (idx > 0) {
-                String requestId = member.substring(0, idx);
-                userRanks.put(requestId, rank++);
-            }
-        }
-        return userRanks;
-    }
-
 }
