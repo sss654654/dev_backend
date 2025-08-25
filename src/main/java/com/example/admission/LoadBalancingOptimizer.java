@@ -28,8 +28,6 @@ public class LoadBalancingOptimizer {
     public LoadBalancingOptimizer(StringRedisTemplate redisTemplate) {
         this.redisTemplate = redisTemplate;
         this.podId = generatePodId();
-        
-        // Pod 등록
         registerPod();
     }
 
@@ -49,7 +47,6 @@ public class LoadBalancingOptimizer {
             String key = "load_balancer:active_pods";
             redisTemplate.opsForZSet().add(key, podId, System.currentTimeMillis());
             redisTemplate.expire(key, java.time.Duration.ofMinutes(5));
-            
             logger.info("Load Balancer에 Pod 등록: {}", podId);
         } catch (Exception e) {
             logger.error("Pod 등록 실패", e);
@@ -60,7 +57,6 @@ public class LoadBalancingOptimizer {
         if (!enableLoadBalancing) {
             return true;
         }
-
         try {
             return switch (loadBalancingStrategy.toUpperCase()) {
                 case "ROUND_ROBIN" -> shouldProcessRoundRobin(movieId);
@@ -77,8 +73,7 @@ public class LoadBalancingOptimizer {
     private boolean shouldProcessRoundRobin(String movieId) {
         List<String> activePods = getActivePods();
         if (activePods.isEmpty() || !activePods.contains(podId)) {
-             // Pod 목록이 비었거나 내가 아직 목록에 없다면, 잠시 후 다시 시도하도록 false 반환
-             logger.warn("활성 Pod 목록에 현재 Pod({})이 없습니다. 목록: {}", podId, activePods);
+             logger.warn("활성 Pod 목록에 현재 Pod({})이 없거나 목록이 비었습니다. 목록: {}", podId, activePods);
              return false;
         }
         
@@ -87,24 +82,21 @@ public class LoadBalancingOptimizer {
         String assignedPod = activePods.get(assignedPodIndex);
         
         boolean shouldProcess = podId.equals(assignedPod);
-        
         if (shouldProcess) {
             logger.debug("Round Robin - 영화 {} 처리 담당: {}", movieId, podId);
         }
-        
         return shouldProcess;
     }
 
     private boolean shouldProcessHashBased(String movieId) {
         List<String> activePods = getActivePods();
-         if (activePods.isEmpty() || !activePods.contains(podId)) {
+        if (activePods.isEmpty() || !activePods.contains(podId)) {
              return false;
         }
         
         int targetHash = Math.abs(movieId.hashCode());
         String assignedPod = activePods.stream()
-            .min(Comparator.comparingInt(pod -> 
-                Math.abs(pod.hashCode() - targetHash)))
+            .min(Comparator.comparingInt(pod -> Math.abs(pod.hashCode() - targetHash)))
             .orElse(podId);
         
         return podId.equals(assignedPod);
@@ -113,12 +105,10 @@ public class LoadBalancingOptimizer {
     private boolean shouldProcessLeastLoaded(String movieId) {
         try {
             int myLoad = getCurrentPodLoad();
-            
             List<String> activePods = getActivePods();
             if (activePods.isEmpty() || !activePods.contains(podId)) {
                 return false;
             }
-
             for (String otherPod : activePods) {
                 if (!otherPod.equals(podId)) {
                     int otherLoad = getPodLoad(otherPod);
@@ -127,21 +117,17 @@ public class LoadBalancingOptimizer {
                     }
                 }
             }
-            
             logger.debug("Least Loaded - 영화 {} 처리 (현재 부하: {})", movieId, myLoad);
             return true;
-            
         } catch (Exception e) {
             logger.error("최소 부하 계산 중 오류", e);
             return shouldProcessRoundRobin(movieId);
         }
     }
 
-    // ★★★ 핵심 수정: Race Condition을 유발하던 로직을 제거하고, Redis의 데이터를 직접 신뢰하도록 변경
     private List<String> getActivePods() {
         try {
             String key = "load_balancer:active_pods";
-            
             long fiveMinutesAgo = System.currentTimeMillis() - (5 * 60 * 1000);
             redisTemplate.opsForZSet().removeRangeByScore(key, 0, fiveMinutesAgo);
             
@@ -149,12 +135,10 @@ public class LoadBalancingOptimizer {
             if (pods == null) {
                 return Collections.emptyList();
             }
-            // 모든 Pod가 동일한 순서의 리스트를 받도록 정렬
             return pods.stream().sorted().collect(Collectors.toList());
-            
         } catch (Exception e) {
             logger.error("활성 Pod 목록 조회 실패", e);
-            return List.of(podId); // Fallback
+            return List.of(podId);
         }
     }
 
@@ -182,11 +166,8 @@ public class LoadBalancingOptimizer {
     public void updatePodLoad(int currentLoad) {
         try {
             String loadKey = "load_balancer:pod_load:" + podId;
-            redisTemplate.opsForValue().set(loadKey, String.valueOf(currentLoad));
-            redisTemplate.expire(loadKey, java.time.Duration.ofMinutes(10));
-            
+            redisTemplate.opsForValue().set(loadKey, String.valueOf(currentLoad), java.time.Duration.ofMinutes(10));
             registerPod();
-            
         } catch (Exception e) {
             logger.error("Pod 부하 업데이트 실패", e);
         }
@@ -194,7 +175,6 @@ public class LoadBalancingOptimizer {
 
     public Map<String, Object> getLoadBalancingStatus() {
         Map<String, Object> status = new HashMap<>();
-        
         try {
             List<String> activePods = getActivePods();
             int myLoad = getCurrentPodLoad();
@@ -205,12 +185,10 @@ public class LoadBalancingOptimizer {
             status.put("currentLoad", myLoad);
             status.put("strategy", loadBalancingStrategy);
             status.put("enabled", enableLoadBalancing);
-            
         } catch (Exception e) {
             logger.error("부하 분산 상태 조회 실패", e);
             status.put("error", e.getMessage());
         }
-        
         return status;
     }
 }
