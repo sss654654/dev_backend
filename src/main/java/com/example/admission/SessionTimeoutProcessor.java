@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet; // 👈 [ERROR FIXED] This line was missing
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -63,16 +63,19 @@ public class SessionTimeoutProcessor {
                 if (members == null || members.isEmpty()) continue;
 
                 List<String> expiredMembers = new ArrayList<>();
-                List<String> keysToCheck = new ArrayList<>();
+                
+                // ✅ CROSSSLOT 오류 해결: multiGet() 대신 개별 조회
                 for (String member : members) {
-                    keysToCheck.add("active_users:movie:" + movieId + ":" + member);
-                }
-
-                List<String> existingTimeoutKeys = redisTemplate.opsForValue().multiGet(keysToCheck);
-
-                for (int i = 0; i < members.size(); i++) {
-                    if (existingTimeoutKeys.get(i) == null) {
-                        expiredMembers.add(new ArrayList<>(members).get(i));
+                    try {
+                        String timeoutKey = "active_users:movie:" + movieId + ":" + member;
+                        String value = redisTemplate.opsForValue().get(timeoutKey);
+                        if (value == null) {
+                            expiredMembers.add(member);
+                        }
+                    } catch (Exception e) {
+                        logger.warn("타임아웃 키 조회 중 오류 ({}): {}", member, e.getMessage());
+                        // 조회 실패한 키는 만료된 것으로 간주
+                        expiredMembers.add(member);
                     }
                 }
                 
@@ -105,40 +108,39 @@ public class SessionTimeoutProcessor {
     }
     
     private Set<String> scanKeys(String pattern) {
-    Set<String> keys = new HashSet<>();
-    try {
-        redisTemplate.execute((RedisConnection connection) -> {
-            try {
-                ScanOptions options = ScanOptions.scanOptions()
-                        .match(pattern)
-                        .count(50)
-                        .build();
-                
-                try (Cursor<byte[]> cursor = connection.scan(options)) {
-                    while (cursor.hasNext()) {
-                        try {
-                            String key = new String(cursor.next(), StandardCharsets.UTF_8);
-                            keys.add(key);
-                        } catch (Exception e) {
-                            logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
+        Set<String> keys = new HashSet<>();
+        try {
+            redisTemplate.execute((RedisConnection connection) -> {
+                try {
+                    ScanOptions options = ScanOptions.scanOptions()
+                            .match(pattern)
+                            .count(50)
+                            .build();
+                    
+                    try (Cursor<byte[]> cursor = connection.scan(options)) {
+                        while (cursor.hasNext()) {
+                            try {
+                                String key = new String(cursor.next(), StandardCharsets.UTF_8);
+                                keys.add(key);
+                            } catch (Exception e) {
+                                logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
+                            }
                         }
+                    } catch (Exception e) {
+                        logger.error("Redis SCAN cursor 처리 중 오류", e);
                     }
                 } catch (Exception e) {
-                    logger.error("Redis SCAN cursor 처리 중 오류", e);
+                    logger.error("Redis SCAN 옵션 설정 중 오류", e);
                 }
-            } catch (Exception e) {
-                logger.error("Redis SCAN 옵션 설정 중 오류", e);
-            }
-            return null;
-        });
-    } catch (Exception e) {
-        logger.error("Redis connection 실행 중 오류", e);
-        // 폴백: 빈 Set 반환 (안전하게 처리)
-        logger.warn("SCAN 실패로 빈 키 목록 반환");
+                return null;
+            });
+        } catch (Exception e) {
+            logger.error("Redis connection 실행 중 오류", e);
+            logger.warn("SCAN 실패로 빈 키 목록 반환");
+        }
+        
+        return keys;
     }
-    
-    return keys;
-}
 
     private String extractMovieId(String key) {
         Pattern pattern = Pattern.compile("active_sessions:movie:(.+)");
