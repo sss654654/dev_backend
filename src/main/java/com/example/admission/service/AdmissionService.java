@@ -65,7 +65,7 @@ public class AdmissionService {
             return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.", requestId, myRank != null ? myRank + 1 : null, totalWaiting);
         }
     }
-    
+
     // [핵심 수정] admitUsersFromQueue 메소드를 Redis 클러스터 호환 방식으로 변경
     public Map<String, String> admitUsersFromQueue(String type, String id, long count) {
         String waitingQueueKey = waitingQueueKey(type, id);
@@ -78,7 +78,7 @@ public class AdmissionService {
         }
 
         Map<String, String> resultMap = new HashMap<>();
-        
+
         // 2. 각 사용자에 대해 개별적으로 활성 세션 추가 및 타임아웃 설정을 합니다.
         for (String member : membersToAdmit) {
             // 활성 세션에 추가 (단일 키 명령어)
@@ -94,11 +94,11 @@ public class AdmissionService {
 
         // 3. 마지막으로, 입장시킨 사용자들을 대기열에서 제거합니다. (단일 키 명령어)
         zSetOps.remove(waitingQueueKey, membersToAdmit.toArray());
-        
+
         logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, membersToAdmit.size());
         return resultMap;
     }
-    
+
     // (이하 다른 메소드들은 변경 없음)
     // ...
     public void leave(String type, String id, String sessionId, String requestId) {
@@ -152,7 +152,7 @@ public class AdmissionService {
         Set<String> movieIds = setOps.members(WAITING_MOVIES);
         return movieIds != null ? movieIds : Collections.emptySet();
     }
-    
+
     private String activeSessionsKey(String type, String id) { return "active_sessions:" + type + ":" + id; }
     private String waitingQueueKey(String type, String id) { return "waiting_queue:" + type + ":" + id; }
     private String activeUserTimeoutKey(String type, String id, String member) { return "active_user_ttl:" + type + ":" + id + ":" + member; }
