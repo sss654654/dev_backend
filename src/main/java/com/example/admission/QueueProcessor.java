@@ -122,4 +122,5 @@ public class QueueProcessor {
             logger.error("시스템 상태 로깅 중 오류", e);
         }
     }
-}
+} 
+// .
