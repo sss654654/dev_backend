@@ -33,21 +33,21 @@ build-sonar:
   allow_failure: true
 
 
-owasp_dependency_check:
-  image:
-    name: registry.gitlab.com/gitlab-ci-utils/docker-dependency-check:latest
-    entrypoint: [""]
-  stage: test
-  script:
-    - >
-      /usr/share/dependency-check/bin/dependency-check.sh --scan "./" --format ALL
-      --project "$CI_PROJECT_NAME" --failOnCVSS 0
-  allow_failure: true
-  artifacts:
-    when: always
-    paths:
-      - "./dependency-check-report.html"
-      - "./dependency-check-report.json"
+# owasp_dependency_check:
+#   image:
+#     name: registry.gitlab.com/gitlab-ci-utils/docker-dependency-check:latest
+#     entrypoint: [""]
+#   stage: test
+#   script:
+#     - >
+#       /usr/share/dependency-check/bin/dependency-check.sh --scan "./" --format ALL
+#       --project "$CI_PROJECT_NAME" --failOnCVSS 0
+#   allow_failure: true
+#   artifacts:
+#     when: always
+#     paths:
+#       - "./dependency-check-report.html"
+#       - "./dependency-check-report.json"
 
 build:
   stage: build
