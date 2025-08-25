@@ -1,25 +1,15 @@
 package com.example.admission.service;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
+
 import com.example.admission.dto.EnterResponse;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ZSetOperations;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -29,6 +19,9 @@ public class AdmissionService {
 
     private static final Logger logger = LoggerFactory.getLogger(AdmissionService.class);
 
+    private static final String ACTIVE_MOVIES  = "active_movies";
+    private static final String WAITING_MOVIES = "waiting_movies";
+
     @Value("${admission.max-active-sessions:2}")
     private long fallbackMaxActiveSessions;
 
@@ -36,12 +29,13 @@ public class AdmissionService {
     private long sessionTimeoutSeconds;
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final DynamicSessionCalculator sessionCalculator;
+    private final com.example.admission.service.DynamicSessionCalculator sessionCalculator;
+
     private ZSetOperations<String, String> zSetOps;
     private SetOperations<String, String> setOps;
 
     public AdmissionService(RedisTemplate<String, String> redisTemplate,
-                           DynamicSessionCalculator sessionCalculator) {
+                            com.example.admission.service.DynamicSessionCalculator sessionCalculator) {
         this.redisTemplate = redisTemplate;
         this.sessionCalculator = sessionCalculator;
     }
@@ -54,9 +48,9 @@ public class AdmissionService {
     }
 
     public EnterResponse tryEnter(String type, String id, String sessionId, String requestId) {
-        String activeSessionsKey = "active_sessions:" + type + ":" + id;
-        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
-        String activeUsersKeyPrefix = "active_users:" + type + ":" + id + ":";
+        String activeSessionsKey = activeSessionsKey(type, id); // SET
+        String waitingQueueKey   = waitingQueueKey(type, id);   // ZSET
+        String activeUsersPrefix = activeUsersPrefix(type, id); // STRING TTL prefix
         String member = requestId + ":" + sessionId;
 
         long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
@@ -64,176 +58,144 @@ public class AdmissionService {
         if (currentActiveSessions == null) currentActiveSessions = 0L;
 
         if (currentActiveSessions < maxActiveSessions) {
+            // 즉시 입장
             setOps.add(activeSessionsKey, member);
-            redisTemplate.opsForValue().set(activeUsersKeyPrefix + member, "1", Duration.ofSeconds(sessionTimeoutSeconds));
-            
+            redisTemplate.opsForValue().set(activeUsersPrefix + member, "1", Duration.ofSeconds(sessionTimeoutSeconds));
+
+            // 🔹 인덱스 갱신
+            redisTemplate.opsForSet().add(ACTIVE_MOVIES, id);
+
             logger.info("[{}] 즉시 입장 성공: {}/{}", id, currentActiveSessions + 1, maxActiveSessions);
             return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장되었습니다.", requestId, null, null);
         } else {
+            // 대기열 등록
             double score = Instant.now().toEpochMilli();
             zSetOps.add(waitingQueueKey, member, score);
+
+            // 🔹 인덱스 갱신
+            redisTemplate.opsForSet().add(WAITING_MOVIES, id);
+
             Long myRank = zSetOps.rank(waitingQueueKey, member);
             Long totalWaiting = zSetOps.zCard(waitingQueueKey);
 
             logger.info("[{}] 대기열 등록: 순위 {}/{}", id, myRank != null ? myRank + 1 : "?", totalWaiting);
-            return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.", requestId, myRank != null ? myRank + 1 : null, totalWaiting);
+            return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.",
+                    requestId, myRank != null ? myRank + 1 : null, totalWaiting);
         }
     }
 
     public void leave(String type, String id, String sessionId, String requestId) {
-        String activeSessionsKey = "active_sessions:" + type + ":" + id;
-        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
+        String activeSessionsKey = activeSessionsKey(type, id);
+        String waitingQueueKey   = waitingQueueKey(type, id);
         String member = requestId + ":" + sessionId;
 
         if (Boolean.TRUE.equals(setOps.isMember(activeSessionsKey, member))) {
             setOps.remove(activeSessionsKey, member);
             logger.info("[{}] 활성 세션에서 퇴장: {}", id, member);
+
+            Long remain = setOps.size(activeSessionsKey);
+            if (remain == null || remain == 0) {
+                redisTemplate.opsForSet().remove(ACTIVE_MOVIES, id);
+            }
         } else if (zSetOps.score(waitingQueueKey, member) != null) {
             zSetOps.remove(waitingQueueKey, member);
             logger.info("[{}] 대기열에서 퇴장: {}", id, member);
+
+            Long waitingRemain = zSetOps.zCard(waitingQueueKey);
+            if (waitingRemain == null || waitingRemain == 0) {
+                redisTemplate.opsForSet().remove(WAITING_MOVIES, id);
+            }
         }
     }
 
     public long getTotalWaitingCount(String type, String id) {
-        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
-        Long count = zSetOps.zCard(waitingQueueKey);
+        Long count = zSetOps.zCard(waitingQueueKey(type, id));
         return count != null ? count : 0;
     }
 
     public long getActiveSessionCount(String type, String id) {
-        String activeSessionsKey = "active_sessions:" + type + ":" + id;
-        Long count = setOps.size(activeSessionsKey);
+        Long count = setOps.size(activeSessionsKey(type, id));
         return count != null ? count : 0;
     }
-    
+
     public long getVacantSlots(String type, String id) {
         long max = sessionCalculator.calculateMaxActiveSessions();
         long current = getActiveSessionCount(type, id);
         return Math.max(0, max - current);
     }
-    
-    // AdmissionService.java의 getActiveQueueMovieIds() 메서드를 다음과 같이 수정하세요:
 
+    // 🔹 SCAN 제거: 인덱스 기반으로 활성 대기열 영화 목록 조회
     public Set<String> getActiveQueueMovieIds() {
-    Set<String> movieIds = new HashSet<>();
-    try {
-        redisTemplate.execute((RedisConnection connection) -> {
-            try {
-                ScanOptions options = ScanOptions.scanOptions()
-                        .match("waiting_queue:movie:*")
-                        .count(50)
-                        .build();
-                
-                try (Cursor<byte[]> cursor = connection.scan(options)) {
-                    while (cursor.hasNext()) {
-                        try {
-                            String key = new String(cursor.next(), StandardCharsets.UTF_8);
-                            if (key.startsWith("waiting_queue:movie:")) {
-                                String movieId = key.substring("waiting_queue:movie:".length());
-                                if (!movieId.isEmpty()) {
-                                    movieIds.add(movieId);
-                                }
-                            }
-                        } catch (Exception e) {
-                            logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Redis SCAN cursor 처리 중 오류", e);
-                }
-            } catch (Exception e) {
-                logger.error("Redis SCAN 옵션 설정 중 오류", e);
-            }
-            return null;
-        });
-    } catch (Exception e) {
-        logger.error("Redis connection 실행 중 오류", e);
-        // 폴백: 하드코딩된 movieIds 반환
-        movieIds.add("movie-avatar3");
-        movieIds.add("movie1");
-        logger.warn("SCAN 실패로 폴백 영화 목록 사용: {}", movieIds);
-    }
-    
-    logger.debug("활성 대기열 영화 IDs: {}", movieIds);
-    return movieIds;
-}
-        
-    // AdmissionService.java의 admitUsersFromQueue() 메서드를 다음과 같이 교체하세요:
+        Set<String> ids = redisTemplate.opsForSet().members(WAITING_MOVIES);
+        if (ids == null || ids.isEmpty()) return Collections.emptySet();
 
+        // 인덱스 정합성 자가치유(옵션): 대기열이 비면 인덱스에서 제거
+        Set<String> valid = new HashSet<>();
+        for (String id : ids) {
+            Long z = redisTemplate.opsForZSet().zCard(waitingQueueKey("movie", id));
+            if (z != null && z > 0) {
+                valid.add(id);
+            } else {
+                redisTemplate.opsForSet().remove(WAITING_MOVIES, id);
+            }
+        }
+        return valid;
+    }
+
+    // 🔹 Lua 제거: 개별 명령으로 이동 + 인덱스 갱신
     public Map<String, String> admitUsersFromQueue(String type, String id, long count) {
-        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
-        String activeSessionsKey = "active_sessions:" + type + ":" + id;
-        String activeUsersKeyPrefix = "active_users:" + type + ":" + id + ":";
+        String waitingQueueKey = waitingQueueKey(type, id);
+        String activeSessionsKey = activeSessionsKey(type, id);
+        String activeUsersPrefix = activeUsersPrefix(type, id);
 
         try {
-            // ✅ CROSSSLOT 오류 해결: Lua 스크립트 대신 개별 Redis 명령 사용
-            
-            // 1. 대기열에서 입장할 사용자들을 가져옴
-            Set<String> membersToAdmit = zSetOps.range(waitingQueueKey, 0, count - 1);
-            
+            if (count <= 0) return Collections.emptyMap();
+
+            long end = count - 1;
+            Set<String> membersToAdmit = zSetOps.range(waitingQueueKey, 0, end);
             if (membersToAdmit == null || membersToAdmit.isEmpty()) {
                 return Collections.emptyMap();
             }
-            
+
             Map<String, String> resultMap = new HashMap<>();
-            List<String> admittedMembers = new ArrayList<>();
-            
-            // 2. 각 사용자를 개별적으로 처리
+            List<String> admitted = new ArrayList<>();
+
             for (String member : membersToAdmit) {
                 try {
-                    // 활성 세션에 추가
                     setOps.add(activeSessionsKey, member);
-                    
-                    // 타임아웃 키 설정
-                    redisTemplate.opsForValue().set(
-                        activeUsersKeyPrefix + member, 
-                        "1", 
-                        Duration.ofSeconds(sessionTimeoutSeconds)
-                    );
-                    
-                    // 결과 맵에 추가
-                    String[] parts = member.split(":", 2);
-                    if (parts.length == 2) {
-                        resultMap.put(parts[0], parts[1]); // requestId -> sessionId
+                    redisTemplate.opsForValue().set(activeUsersPrefix + member, "1",
+                            Duration.ofSeconds(sessionTimeoutSeconds));
+
+                    int idx = member.indexOf(':');
+                    if (idx > 0) {
+                        String requestId = member.substring(0, idx);
+                        String sessionId = member.substring(idx + 1);
+                        resultMap.put(requestId, sessionId);
                     }
-                    
-                    admittedMembers.add(member);
-                    
+                    admitted.add(member);
                 } catch (Exception e) {
-                    logger.warn("사용자 입장 처리 중 오류 ({}): {}", member, e.getMessage());
+                    logger.warn("[{}] 사용자 입장 처리 중 오류 ({}): {}", id, member, e.getMessage());
                 }
             }
-            
-            // 3. 성공적으로 처리된 사용자들을 대기열에서 제거
-            if (!admittedMembers.isEmpty()) {
-                zSetOps.remove(waitingQueueKey, admittedMembers.toArray());
-                logger.info("[{}] 대기열에서 {}명을 활성세션으로 이동 완료", id, admittedMembers.size());
+
+            if (!admitted.isEmpty()) {
+                zSetOps.remove(waitingQueueKey, admitted.toArray());
+                // 🔹 인덱스 갱신
+                redisTemplate.opsForSet().add(ACTIVE_MOVIES, id);
+
+                Long remain = zSetOps.zCard(waitingQueueKey);
+                if (remain == null || remain == 0) {
+                    redisTemplate.opsForSet().remove(WAITING_MOVIES, id);
+                }
+
+                logger.info("[{}] 대기열에서 {}명을 활성세션으로 이동 완료", id, admitted.size());
             }
-            
+
             return resultMap;
-            
         } catch (Exception e) {
             logger.error("대기열에서 사용자 입장 처리 중 오류 발생", e);
             return Collections.emptyMap();
         }
-    }
-    
-    public Map<String, Long> getAllUserRanks(String type, String id) {
-        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
-        Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
-        if (members == null || members.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        
-        Map<String, Long> userRanks = new HashMap<>();
-        long rank = 1;
-        for (String member : members) {
-            if (member.contains(":")) {
-                String requestId = member.split(":")[0];
-                userRanks.put(requestId, rank++);
-            }
-        }
-        return userRanks;
     }
 
     public void logCurrentConfiguration() {
@@ -252,7 +214,40 @@ public class AdmissionService {
         }
     }
 
-    public DynamicSessionCalculator.SessionCalculationInfo getConfiguration() {
+    public com.example.admission.service.DynamicSessionCalculator.SessionCalculationInfo getConfiguration() {
         return sessionCalculator.getCalculationInfo();
     }
+
+    private String activeSessionsKey(String type, String id) {
+        return "active_sessions:" + type + ":" + id;
+    }
+
+    private String waitingQueueKey(String type, String id) {
+        return "waiting_queue:" + type + ":" + id;
+    }
+
+    private String activeUsersPrefix(String type, String id) {
+        return "active_users:" + type + ":" + id + ":";
+    }
+
+
+    // AdmissionService.java 내부에 추가
+    public Map<String, Long> getAllUserRanks(String type, String id) {
+        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
+        Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
+        if (members == null || members.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Long> userRanks = new HashMap<>();
+        long rank = 1;
+        for (String member : members) {
+            int idx = member.indexOf(':');
+            if (idx > 0) {
+                String requestId = member.substring(0, idx);
+                userRanks.put(requestId, rank++);
+            }
+        }
+        return userRanks;
+    }
+
 }

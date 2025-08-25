@@ -3,14 +3,10 @@ package com.example.admission.service;
 import com.example.admission.dto.AdmissionMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -18,22 +14,25 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class AdmissionMetricsService {
     private static final Logger logger = LoggerFactory.getLogger(AdmissionMetricsService.class);
-    
+
+    private static final String ACTIVE_MOVIES = "active_movies";
+    private static final String WAITING_MOVIES = "waiting_movies";
+
     private final RedisTemplate<String, String> redisTemplate;
     private final AdmissionService admissionService;
-    private final DynamicSessionCalculator sessionCalculator;
-    
+    private final com.example.admission.service.DynamicSessionCalculator sessionCalculator;
+
     private final Map<String, AtomicLong> realtimeMetrics = new ConcurrentHashMap<>();
     private final Map<String, Deque<Long>> historicalData = new ConcurrentHashMap<>();
     private final int HISTORY_LIMIT = 100;
 
     public AdmissionMetricsService(RedisTemplate<String, String> redisTemplate,
                                    AdmissionService admissionService,
-                                   DynamicSessionCalculator sessionCalculator) {
+                                   com.example.admission.service.DynamicSessionCalculator sessionCalculator) {
         this.redisTemplate = redisTemplate;
         this.admissionService = admissionService;
         this.sessionCalculator = sessionCalculator;
-        
+
         realtimeMetrics.put("totalEntriesProcessed", new AtomicLong(0));
         realtimeMetrics.put("totalTimeouts", new AtomicLong(0));
         realtimeMetrics.put("totalQueueJoins", new AtomicLong(0));
@@ -47,15 +46,15 @@ public class AdmissionMetricsService {
         try {
             long allActiveSessions = getAllActiveSessionsCount();
             long allWaitingUsers = getAllWaitingUsersCount();
-            
+
             updateHistory("queueSizeHistory", allWaitingUsers);
 
-            DynamicSessionCalculator.SessionCalculationInfo config = sessionCalculator.getCalculationInfo();
+            com.example.admission.service.DynamicSessionCalculator.SessionCalculationInfo config = sessionCalculator.getCalculationInfo();
             if (config.calculatedMaxSessions() > 0) {
                 long utilization = (allActiveSessions * 100) / config.calculatedMaxSessions();
                 updateHistory("podUtilizationHistory", utilization);
             }
-            
+
             logger.debug("시스템 메트릭 수집: 활성 세션 = {}, 대기자 = {}", allActiveSessions, allWaitingUsers);
         } catch (Exception e) {
             logger.error("시스템 메트릭 수집 중 오류 발생", e);
@@ -68,27 +67,27 @@ public class AdmissionMetricsService {
         updateHistory("throughputHistory", throughput);
         logger.info("분당 처리량 메트릭: {}명", throughput);
     }
-    
+
     public AdmissionMetrics getCurrentMetrics() {
-        DynamicSessionCalculator.SessionCalculationInfo config = sessionCalculator.getCalculationInfo();
+        com.example.admission.service.DynamicSessionCalculator.SessionCalculationInfo config = sessionCalculator.getCalculationInfo();
         long totalProcessed = realtimeMetrics.get("totalEntriesProcessed").get();
         long totalTime = realtimeMetrics.get("totalProcessingTimeMs").get();
         long avgProcessingTime = totalProcessed > 0 ? totalTime / totalProcessed : 0;
-        
+
         return new AdmissionMetrics(
-            System.currentTimeMillis(),
-            config.currentPodCount(),
-            config.calculatedMaxSessions(),
-            getAllActiveSessionsCount(),
-            getAllWaitingUsersCount(),
-            totalProcessed,
-            realtimeMetrics.get("totalTimeouts").get(),
-            realtimeMetrics.get("totalQueueJoins").get(),
-            realtimeMetrics.get("totalBatchProcesses").get(),
-            avgProcessingTime,
-            new ArrayList<>(historicalData.getOrDefault("throughputHistory", new LinkedList<>())),
-            new ArrayList<>(historicalData.getOrDefault("queueSizeHistory", new LinkedList<>())),
-            new ArrayList<>(historicalData.getOrDefault("podUtilizationHistory", new LinkedList<>()))
+                System.currentTimeMillis(),
+                config.currentPodCount(),
+                config.calculatedMaxSessions(),
+                getAllActiveSessionsCount(),
+                getAllWaitingUsersCount(),
+                totalProcessed,
+                realtimeMetrics.get("totalTimeouts").get(),
+                realtimeMetrics.get("totalQueueJoins").get(),
+                realtimeMetrics.get("totalBatchProcesses").get(),
+                avgProcessingTime,
+                new ArrayList<>(historicalData.getOrDefault("throughputHistory", new LinkedList<>())),
+                new ArrayList<>(historicalData.getOrDefault("queueSizeHistory", new LinkedList<>())),
+                new ArrayList<>(historicalData.getOrDefault("podUtilizationHistory", new LinkedList<>()))
         );
     }
 
@@ -101,7 +100,7 @@ public class AdmissionMetricsService {
         historicalData.clear();
         logger.info("모든 메트릭이 초기화되었습니다.");
     }
-    
+
     private void updateHistory(String key, long value) {
         historicalData.computeIfAbsent(key, k -> new LinkedList<>()).addLast(value);
         Deque<Long> queue = historicalData.get(key);
@@ -109,88 +108,46 @@ public class AdmissionMetricsService {
             queue.removeFirst();
         }
     }
-    
-    private Set<String> scanKeys(String pattern) {
-    Set<String> keys = new HashSet<>();
-    try {
-        redisTemplate.execute((RedisConnection connection) -> {
-            try {
-                ScanOptions options = ScanOptions.scanOptions()
-                        .match(pattern)
-                        .count(50)
-                        .build();
-                
-                try (Cursor<byte[]> cursor = connection.scan(options)) {
-                    while (cursor.hasNext()) {
-                        try {
-                            String key = new String(cursor.next(), StandardCharsets.UTF_8);
-                            keys.add(key);
-                        } catch (Exception e) {
-                            logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Redis SCAN cursor 처리 중 오류", e);
-                }
-            } catch (Exception e) {
-                logger.error("Redis SCAN 옵션 설정 중 오류", e);
-            }
-            return null;
-        });
-    } catch (Exception e) {
-        logger.error("Redis connection 실행 중 오류", e);
-        // 폴백: 빈 Set 반환
-        logger.warn("SCAN 실패로 빈 키 목록 반환");
-    }
-    
-    return keys;
-}
-    private long sumSetCardByPattern(String pattern) {
-        long totalCount = 0;
-        try {
-            Set<String> keys = scanKeys(pattern);
-            if (keys.isEmpty()) {
-                return 0;
-            }
-            for (String key : keys) {
-                Long size = redisTemplate.opsForSet().size(key);
-                if (size != null) {
-                    totalCount += size;
-                }
-            }
-        } catch (Exception e) {
-            logger.error("패턴 {} 스캔 중 오류", pattern, e);
-        }
-        return totalCount;
-    }
-    
-    private long sumZCardByPattern(String pattern) {
-        long totalCount = 0;
-        try {
-            Set<String> keys = scanKeys(pattern);
-            if (keys.isEmpty()) {
-                return 0;
-            }
-            for (String key : keys) {
-                Long size = redisTemplate.opsForZSet().zCard(key);
-                if (size != null) {
-                    totalCount += size;
-                }
-            }
-        } catch (Exception e) {
-            logger.error("패턴 {} 스캔 중 오류", pattern, e);
-        }
-        return totalCount;
-    }
 
+    // 🔹 SCAN 제거: 인덱스 기반 합산
     public long getAllActiveSessionsCount() {
-        return sumSetCardByPattern("active_sessions:movie:*");
+        Set<String> movieIds = redisTemplate.opsForSet().members(ACTIVE_MOVIES);
+        if (movieIds == null || movieIds.isEmpty()) return 0L;
+
+        long total = 0L;
+        for (String id : movieIds) {
+            Long sz = redisTemplate.opsForSet().size(activeSessionsKey(id));
+            if (sz != null) total += sz;
+        }
+        return total;
     }
 
     public long getAllWaitingUsersCount() {
-        return sumZCardByPattern("waiting_queue:movie:*");
+        // waiting_movies가 비어있을 수 있으니 active_movies와 합집합으로 안전하게 집계
+        Set<String> union = new HashSet<>();
+        Set<String> waiting = redisTemplate.opsForSet().members(WAITING_MOVIES);
+        Set<String> active  = redisTemplate.opsForSet().members(ACTIVE_MOVIES);
+        if (waiting != null) union.addAll(waiting);
+        if (active  != null) union.addAll(active);
+        if (union.isEmpty()) return 0L;
+
+        long total = 0L;
+        for (String id : union) {
+            Long sz = redisTemplate.opsForZSet().zCard(waitingQueueKey(id));
+            if (sz != null) total += sz;
+        }
+        return total;
     }
-    
+
+    private String activeSessionsKey(String movieId) {
+        return "active_sessions:movie:" + movieId;
+    }
+
+    private String waitingQueueKey(String movieId) {
+        return "waiting_queue:movie:" + movieId;
+    }
+
+    // AdmissionMetricsService.java 내부에 추가
     public Map<String, Object> getPerformanceAnalysis() {
         Map<String, Object> analysis = new HashMap<>();
         AdmissionMetrics metrics = getCurrentMetrics();
@@ -198,22 +155,22 @@ public class AdmissionMetricsService {
             double avgThroughput = metrics.getAverageThroughputPerMinute();
             double avgUtilization = metrics.podUtilizationHistory().stream()
                     .mapToLong(Long::longValue).average().orElse(0.0);
-            
+
             List<Long> queueSizes = metrics.queueSizeHistory();
             boolean queueGrowing = queueSizes.size() >= 2 &&
                     queueSizes.get(queueSizes.size() - 1) > queueSizes.get(queueSizes.size() - 2);
-            
+
             analysis.put("avgThroughputPerMinute", Math.round(avgThroughput));
             analysis.put("avgPodUtilization", Math.round(avgUtilization * 10) / 10.0);
             analysis.put("isQueueGrowing", queueGrowing);
             analysis.put("recommendScaleUp", avgUtilization > 80 && queueGrowing);
             analysis.put("recommendScaleDown", avgUtilization < 30 && !queueGrowing);
             analysis.put("systemHealth", avgUtilization < 90 ? "HEALTHY" : "OVERLOADED");
-            
         } catch (Exception e) {
             logger.error("성능 분석 중 오류", e);
             analysis.put("error", e.getMessage());
         }
         return analysis;
     }
+
 }
