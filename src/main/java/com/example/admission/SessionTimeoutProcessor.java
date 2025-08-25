@@ -1,3 +1,4 @@
+// com/example/admission/SessionTimeoutProcessor.java
 package com.example.admission;
 
 import com.example.admission.service.AdmissionMetricsService;
@@ -6,20 +7,16 @@ import com.example.admission.ws.WebSocketUpdateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Component
 public class SessionTimeoutProcessor {
@@ -31,9 +28,6 @@ public class SessionTimeoutProcessor {
     private final AdmissionMetricsService metricsService;
     private final LoadBalancingOptimizer loadBalancer;
 
-    @Value("${admission.session-timeout-seconds:30}")
-    private long sessionTimeoutSeconds;
-
     public SessionTimeoutProcessor(RedisTemplate<String, String> redisTemplate,
                                      WebSocketUpdateService webSocketUpdateService,
                                      AdmissionMetricsService metricsService,
@@ -44,106 +38,41 @@ public class SessionTimeoutProcessor {
         this.loadBalancer = loadBalancer;
     }
 
-    @Scheduled(fixedDelayString = "${admission.session-processor-interval-ms:2000}")
+    @Scheduled(fixedDelayString = "${admission.session-processor-interval-ms:5000}") // 주기를 5초로 늘려 안정성 확보
     public void processExpiredSessions() {
-        long startTime = System.currentTimeMillis();
-        int totalProcessedMovies = 0;
-        long totalTimeouts = 0;
+        Set<String> movieIds = redisTemplate.opsForSet().members("active_movies");
+        if (movieIds == null || movieIds.isEmpty()) return;
 
-        try {
-            Set<String> activeSessionKeys = scanKeys("active_sessions:movie:*");
+        for (String movieId : movieIds) {
+            if (!loadBalancer.shouldProcessMovie(movieId)) continue;
 
-            for (String activeSessionsKey : activeSessionKeys) {
-                String movieId = extractMovieId(activeSessionsKey);
-                if (movieId == null) continue;
+            String activeSessionsKey = "active_sessions:movie:" + movieId;
+            Set<String> members = redisTemplate.opsForSet().members(activeSessionsKey);
+            if (members == null || members.isEmpty()) continue;
 
-                // This movie's processing is assigned to this pod
-                if (!loadBalancer.shouldProcessMovie(movieId)) {
-                    continue; // Skip if not assigned to this pod
-                }
-
-                totalProcessedMovies++;
-
-                Set<String> members = redisTemplate.opsForSet().members(activeSessionsKey);
-                if (members == null || members.isEmpty()) continue;
-
-                List<String> expiredMembers = new ArrayList<>();
-
-                // ✅ CROSSSLOT error solution: individual lookups instead of multiGet()
-                for (String member : members) {
-                    try {
-                        String timeoutKey = "active_users:movie:" + movieId + ":" + member;
-                        String value = redisTemplate.opsForValue().get(timeoutKey);
-                        if (value == null) {
-                            expiredMembers.add(member);
-                        }
-                    } catch (Exception e) {
-                        logger.warn("Error checking timeout key for ({}): {}", member, e.getMessage());
-                        // Assume member is expired if key check fails
-                        expiredMembers.add(member);
-                    }
-                }
-
-                if (!expiredMembers.isEmpty()) {
-                    long expiredCount = redisTemplate.opsForSet().remove(activeSessionsKey, expiredMembers.toArray());
-                    totalTimeouts += expiredCount;
-
-                    logger.warn("[{}] Cleaned up {} timed-out active sessions.", activeSessionsKey, expiredCount);
-
-                    expiredMembers.forEach(member -> {
-                        if (member.contains(":")) {
-                            String requestId = member.split(":", 2)[0];
-                            webSocketUpdateService.notifyTimeout(requestId);
-                        }
-                    });
-
-                    metricsService.recordTimeout(movieId, expiredCount);
+            // [핵심 수정] 만료된 세션을 찾기 위한 새로운 로직
+            List<String> expiredMembers = new ArrayList<>();
+            for (String member : members) {
+                String timeoutKey = "active_user_ttl:movie:" + movieId + ":" + member;
+                // TTL 키가 존재하는지 확인. 존재하지 않으면 만료된 것으로 간주.
+                if (Boolean.FALSE.equals(redisTemplate.hasKey(timeoutKey))) {
+                    expiredMembers.add(member);
                 }
             }
-        } catch (Exception e) {
-            logger.error("Error during expired session cleanup", e);
-        }
 
-        if (totalProcessedMovies > 0) {
-            loadBalancer.updatePodLoad(totalProcessedMovies);
-            long processingTime = System.currentTimeMillis() - startTime;
-            logger.debug("Timeout processing complete - Movies processed: {}, Total timeouts: {}, Time taken: {}ms",
-                    totalProcessedMovies, totalTimeouts, processingTime);
-        }
-    }
+            if (!expiredMembers.isEmpty()) {
+                logger.warn("[{}] 타임아웃된 활성 세션 {}개를 발견하여 정리합니다.", movieId, expiredMembers.size());
 
-    private Set<String> scanKeys(String pattern) {
-        Set<String> keys = new HashSet<>();
-        try {
-            redisTemplate.execute((RedisConnection connection) -> {
-                try (Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions().match(pattern).count(50).build())) {
-                    while (cursor.hasNext()) {
-                        try {
-                            String key = new String(cursor.next(), StandardCharsets.UTF_8);
-                            keys.add(key);
-                        } catch (Exception e) {
-                            logger.warn("Error processing Redis SCAN key: {}", e.getMessage());
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Error during Redis SCAN cursor processing", e);
-                }
-                return null;
-            });
-        } catch (Exception e) {
-            logger.error("Error executing Redis connection", e);
-            logger.warn("SCAN failed, returning empty key list.");
-        }
+                // active_sessions Set에서 만료된 멤버들 일괄 삭제
+                redisTemplate.opsForSet().remove(activeSessionsKey, expiredMembers.toArray());
 
-        return keys;
-    }
-
-    private String extractMovieId(String key) {
-        Pattern pattern = Pattern.compile("active_sessions:movie:(.+)");
-        Matcher matcher = pattern.matcher(key);
-        if (matcher.matches()) {
-            return matcher.group(1);
+                expiredMembers.forEach(member -> {
+                    // member 형식: "requestId:sessionId"
+                    String requestId = member.split(":", 2)[0];
+                    webSocketUpdateService.notifyTimeout(requestId);
+                    metricsService.recordTimeout(movieId, 1);
+                });
+            }
         }
-        return null;
     }
 }

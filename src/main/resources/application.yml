@@ -210,5 +210,5 @@ logging:
     io.awspring.cloud: INFO
 
 kubernetes:
-  namespace: default # Pod이 배포된 Kubernetes 네임스페이스
-  app-label: app=cgv-api # 조회할 Pod들이 공통으로 가지고 있는 Label
+  namespace: cgv-api # 이전에 확인하신, Pod이 실행 중인 네임스페이스
+  app-label: app.kubernetes.io/name=cgv-api
