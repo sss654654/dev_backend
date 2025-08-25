@@ -39,12 +39,14 @@ public class QueueProcessor {
 
     /**
      * 🔹 핵심 개선: 5초마다 정확한 세션 상태 확인 후 대기열 처리
+     * SCAN 명령을 사용하지 않아 NumberFormatException 에러 해결
      */
     @Scheduled(fixedDelay = 5000)
     public void processWaitingQueues() {
         long startTime = System.currentTimeMillis();
         
         try {
+            // 🔹 SCAN 대신 직접적인 Set 접근 사용
             Set<String> waitingMovies = redisTemplate.opsForSet().members(WAITING_MOVIES);
             if (waitingMovies == null || waitingMovies.isEmpty()) {
                 logger.debug("대기 중인 영화 없음");
@@ -71,52 +73,57 @@ public class QueueProcessor {
     private void processQueueForMovie(String movieId) {
         String type = "movie";
 
-        // 1. 정확한 빈자리 수 확인 (만료된 세션 자동 제거 포함)
-        long vacantSlots = admissionService.getVacantSlots(type, movieId);
-        long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
-        long currentActive = admissionService.getActiveSessionCount(type, movieId);
-        
-        logger.debug("[{}] 상태 확인 - 빈자리: {}, 대기자: {}, 활성세션: {}", 
-                    movieId, vacantSlots, totalWaiting, currentActive);
+        try {
+            // 1. 정확한 빈자리 수 확인 (만료된 세션 자동 제거 포함)
+            long vacantSlots = admissionService.getVacantSlots(type, movieId);
+            long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
+            long currentActive = admissionService.getActiveSessionCount(type, movieId);
+            
+            logger.debug("[{}] 상태 확인 - 빈자리: {}, 대기자: {}, 활성세션: {}", 
+                        movieId, vacantSlots, totalWaiting, currentActive);
 
-        if (vacantSlots <= 0) {
-            logger.debug("[{}] 빈자리 없음 - 순위 업데이트만 수행", movieId);
+            if (vacantSlots <= 0) {
+                logger.debug("[{}] 빈자리 없음 - 순위 업데이트만 수행", movieId);
+                updateWaitingUsersStatus(type, movieId);
+                return;
+            }
+
+            if (totalWaiting <= 0) {
+                logger.debug("[{}] 대기자 없음", movieId);
+                return;
+            }
+
+            // 2. 배치 크기 결정 (빈자리와 대기자 수 중 작은 값)
+            long batchSize = Math.min(vacantSlots, totalWaiting);
+
+            // 3. 대기열에서 사용자 입장 처리
+            Map<String, String> admittedUsers = admissionService.admitUsersFromQueue(type, movieId, batchSize);
+            if (admittedUsers.isEmpty()) {
+                logger.debug("[{}] 입장 처리된 사용자 없음", movieId);
+                return;
+            }
+
+            logger.info("[{}] 🎬 입장 처리 완료 - {}개 빈자리에 {}명 입장 승인", 
+                       movieId, vacantSlots, admittedUsers.size());
+
+            // 4. 🚨 핵심 개선: Kinesis vs WebSocket 분기 처리
+            if (useKinesis) {
+                logger.info("PRODUCER: Kinesis로 입장 이벤트 전송 시작 - {} 명", admittedUsers.size());
+                kinesisProducer.publishBatchAdmitEvents(admittedUsers, movieId);
+            } else {
+                logger.warn("KINESIS 비활성화: WebSocket 직접 전송 - {} 명", admittedUsers.size());
+                admittedUsers.keySet().forEach(requestId -> {
+                    webSocketUpdateService.notifyAdmitted(requestId);
+                    logger.debug("WebSocket 입장 알림 전송: {}", requestId);
+                });
+            }
+
+            // 5. 대기열 상태 업데이트
             updateWaitingUsersStatus(type, movieId);
-            return;
+            
+        } catch (Exception e) {
+            logger.error("[{}] 영화 대기열 처리 중 오류 발생", movieId, e);
         }
-
-        if (totalWaiting <= 0) {
-            logger.debug("[{}] 대기자 없음", movieId);
-            return;
-        }
-
-        // 2. 배치 크기 결정 (빈자리와 대기자 수 중 작은 값)
-        long batchSize = Math.min(vacantSlots, totalWaiting);
-
-        // 3. 대기열에서 사용자 입장 처리
-        Map<String, String> admittedUsers = admissionService.admitUsersFromQueue(type, movieId, batchSize);
-        if (admittedUsers.isEmpty()) {
-            logger.debug("[{}] 입장 처리된 사용자 없음", movieId);
-            return;
-        }
-
-        logger.info("[{}] 🎬 입장 처리 완료 - {}개 빈자리에 {}명 입장 승인", 
-                   movieId, vacantSlots, admittedUsers.size());
-
-        // 4. 🚨 핵심 개선: Kinesis vs WebSocket 분기 처리
-        if (useKinesis) {
-            logger.info("PRODUCER: Kinesis로 입장 이벤트 전송 시작 - {} 명", admittedUsers.size());
-            kinesisProducer.publishBatchAdmitEvents(admittedUsers, movieId);
-        } else {
-            logger.warn("KINESIS 비활성화: WebSocket 직접 전송 - {} 명", admittedUsers.size());
-            admittedUsers.keySet().forEach(requestId -> {
-                webSocketUpdateService.notifyAdmitted(requestId);
-                logger.debug("WebSocket 입장 알림 전송: {}", requestId);
-            });
-        }
-
-        // 5. 대기열 상태 업데이트
-        updateWaitingUsersStatus(type, movieId);
     }
 
     /**
@@ -166,10 +173,12 @@ public class QueueProcessor {
 
     /**
      * 🔹 시스템 상태 모니터링 (1분마다)
+     * SCAN 명령을 사용하지 않아 NumberFormatException 에러 해결
      */
     @Scheduled(fixedRate = 60000)
     public void logSystemStatus() {
         try {
+            // 🔹 SCAN 대신 직접적인 Set 접근 사용
             Set<String> activeMovies = redisTemplate.opsForSet().members(ACTIVE_MOVIES);
             Set<String> waitingMovies = redisTemplate.opsForSet().members(WAITING_MOVIES);
             
