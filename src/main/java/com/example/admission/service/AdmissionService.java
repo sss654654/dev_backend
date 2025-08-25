@@ -229,4 +229,25 @@ public class AdmissionService {
     private String activeUsersPrefix(String type, String id) {
         return "active_users:" + type + ":" + id + ":";
     }
+
+
+    // AdmissionService.java 내부에 추가
+    public Map<String, Long> getAllUserRanks(String type, String id) {
+        String waitingQueueKey = "waiting_queue:" + type + ":" + id;
+        Set<String> members = zSetOps.range(waitingQueueKey, 0, -1);
+        if (members == null || members.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Long> userRanks = new HashMap<>();
+        long rank = 1;
+        for (String member : members) {
+            int idx = member.indexOf(':');
+            if (idx > 0) {
+                String requestId = member.substring(0, idx);
+                userRanks.put(requestId, rank++);
+            }
+        }
+        return userRanks;
+    }
+
 }

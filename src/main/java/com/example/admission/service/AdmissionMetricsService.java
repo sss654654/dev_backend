@@ -146,4 +146,31 @@ public class AdmissionMetricsService {
     private String waitingQueueKey(String movieId) {
         return "waiting_queue:movie:" + movieId;
     }
+
+    // AdmissionMetricsService.java 내부에 추가
+    public Map<String, Object> getPerformanceAnalysis() {
+        Map<String, Object> analysis = new HashMap<>();
+        AdmissionMetrics metrics = getCurrentMetrics();
+        try {
+            double avgThroughput = metrics.getAverageThroughputPerMinute();
+            double avgUtilization = metrics.podUtilizationHistory().stream()
+                    .mapToLong(Long::longValue).average().orElse(0.0);
+
+            List<Long> queueSizes = metrics.queueSizeHistory();
+            boolean queueGrowing = queueSizes.size() >= 2 &&
+                    queueSizes.get(queueSizes.size() - 1) > queueSizes.get(queueSizes.size() - 2);
+
+            analysis.put("avgThroughputPerMinute", Math.round(avgThroughput));
+            analysis.put("avgPodUtilization", Math.round(avgUtilization * 10) / 10.0);
+            analysis.put("isQueueGrowing", queueGrowing);
+            analysis.put("recommendScaleUp", avgUtilization > 80 && queueGrowing);
+            analysis.put("recommendScaleDown", avgUtilization < 30 && !queueGrowing);
+            analysis.put("systemHealth", avgUtilization < 90 ? "HEALTHY" : "OVERLOADED");
+        } catch (Exception e) {
+            logger.error("성능 분석 중 오류", e);
+            analysis.put("error", e.getMessage());
+        }
+        return analysis;
+    }
+
 }
