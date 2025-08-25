@@ -1,5 +1,3 @@
-// com/example/admission/service/AdmissionService.java
-
 package com.example.admission.service;
 
 import com.example.admission.dto.EnterResponse;
@@ -21,7 +19,7 @@ public class AdmissionService {
 
     private static final Logger logger = LoggerFactory.getLogger(AdmissionService.class);
 
-    private static final String ACTIVE_MOVIES  = "active_movies";
+    private static final String ACTIVE_MOVIES = "active_movies";
     private static final String WAITING_MOVIES = "waiting_movies";
 
     @Value("${admission.session-timeout-seconds:30}")
@@ -33,7 +31,8 @@ public class AdmissionService {
     private ZSetOperations<String, String> zSetOps;
     private SetOperations<String, String> setOps;
 
-    public AdmissionService(RedisTemplate<String, String> redisTemplate, DynamicSessionCalculator sessionCalculator) {
+    public AdmissionService(RedisTemplate<String, String> redisTemplate, 
+                           DynamicSessionCalculator sessionCalculator) {
         this.redisTemplate = redisTemplate;
         this.sessionCalculator = sessionCalculator;
     }
@@ -45,29 +44,31 @@ public class AdmissionService {
     }
 
     /**
-     * 🔹 대기열 진입/즉시 입장 처리
+     * 대기열 진입/즉시 입장 처리 - 활성세션은 Set으로 변경
      */
     public EnterResponse enter(String type, String id, String sessionId, String requestId) {
         setOps.add(ACTIVE_MOVIES, id);
         long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
         long currentActiveSessions = getTotalActiveCount(type, id);
 
+        logger.info("[{}] 입장 요청 - 현재 활성세션: {}/{}, 요청자: {}:{}", 
+                    id, currentActiveSessions, maxActiveSessions, requestId, sessionId);
+
         if (currentActiveSessions < maxActiveSessions) {
-            long now = Instant.now().toEpochMilli();
+            // 활성 세션은 Set으로 관리 (SessionTimeoutProcessor와 일관성 유지)
             String activeKey = activeSessionsKey(type, id);
             String member = requestId + ":" + sessionId;
 
-            zSetOps.add(activeKey, member, now);
+            setOps.add(activeKey, member);
 
-            // ✨ 수정된 부분 시작: 활성 세션의 TTL(만료 시간)을 설정합니다.
-            // 이 키를 SessionTimeoutProcessor가 감지하여 만료된 세션을 자동으로 정리합니다.
+            // TTL 키 설정으로 30초 후 자동 만료 감지
             String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
             redisTemplate.opsForValue().set(timeoutKey, "1", Duration.ofSeconds(sessionTimeoutSeconds));
-            // ✨ 수정된 부분 끝
 
-            logger.info("✅ 즉시 입장 성공 및 TTL 설정 완료: requestId={}", requestId);
+            logger.info("[{}] 즉시 입장 허가 - 현재 활성세션: {}/{}", id, currentActiveSessions + 1, maxActiveSessions);
             return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장되었습니다.", requestId, null, null);
         } else {
+            // 대기열은 ZSet으로 관리 (순서 보장)
             setOps.add(WAITING_MOVIES, id);
             String waitingKey = waitingQueueKey(type, id);
             String member = requestId + ":" + sessionId;
@@ -80,109 +81,120 @@ public class AdmissionService {
             }
             Long totalWaiting = zSetOps.zCard(waitingKey);
 
-            logger.info("⏳ 대기열 등록: requestId={}, 순위: {}/{}", requestId, myRank + 1, totalWaiting);
+            logger.info("[{}] 대기열 등록 - 순위 {}/{}, 요청자: {}:{}", 
+                        id, myRank + 1, totalWaiting, requestId, sessionId);
             return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.", requestId, myRank + 1, totalWaiting);
         }
     }
 
     /**
-     * 🔹 대기열/활성 세션에서 사용자 제거
+     * 대기열/활성 세션에서 사용자 제거
      */
     public void leave(String type, String id, String sessionId, String requestId) {
         String member = requestId + ":" + sessionId;
-        zSetOps.remove(activeSessionsKey(type, id), member);
+        
+        // 활성 세션에서 제거 (Set)
+        setOps.remove(activeSessionsKey(type, id), member);
+        
+        // 대기열에서 제거 (ZSet)
         zSetOps.remove(waitingQueueKey(type, id), member);
 
-        // TTL 키도 함께 삭제하여 불필요한 처리를 방지
+        // TTL 키도 함께 삭제
         String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
         redisTemplate.delete(timeoutKey);
+        
+        logger.info("[{}] 사용자 퇴장 처리 완료: {}:{}", id, requestId, sessionId);
     }
 
     /**
-     * 🔹 대기열에서 다음 사용자들을 가져와 입장 처리
+     * 대기열에서 다음 사용자들을 가져와 활성세션으로 승격 (QueueProcessor에서 호출)
      */
     public List<String> admitNextUsers(String type, String id, long count) {
         String waitingKey = waitingQueueKey(type, id);
         String activeKey = activeSessionsKey(type, id);
 
+        // 대기열에서 가장 오래 기다린 순서대로 가져오기 (ZSet)
         Set<String> membersToAdmit = zSetOps.range(waitingKey, 0, count - 1);
         if (membersToAdmit == null || membersToAdmit.isEmpty()) {
             return Collections.emptyList();
         }
 
-        long now = Instant.now().toEpochMilli();
+        // 활성 세션으로 이동 (Set으로 변경)
         for (String member : membersToAdmit) {
-            zSetOps.add(activeKey, member, now);
+            setOps.add(activeKey, member);
 
-            // ✨ 수정된 부분 시작: 대기열에서 입장하는 사용자에게도 TTL을 설정합니다.
+            // 새로운 활성 세션에도 TTL 설정
             String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
             redisTemplate.opsForValue().set(timeoutKey, "1", Duration.ofSeconds(sessionTimeoutSeconds));
-            // ✨ 수정된 부분 끝
         }
 
+        // 대기열에서 승격된 사용자들 제거 (ZSet)
         zSetOps.removeRange(waitingKey, 0, count - 1);
+        
+        logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, membersToAdmit.size());
         return new ArrayList<>(membersToAdmit);
     }
     
+    /**
+     * 활성 세션 수 조회 (Set으로 변경)
+     */
     public long getTotalActiveCount(String type, String id) {
-        Long count = zSetOps.zCard(activeSessionsKey(type, id));
+        Long count = setOps.size(activeSessionsKey(type, id));
         return count != null ? count : 0;
     }
 
+    /**
+     * 대기열 수 조회 (ZSet)
+     */
     public long getTotalWaitingCount(String type, String id) {
         Long count = zSetOps.zCard(waitingQueueKey(type, id));
         return count != null ? count : 0;
     }
-
-    public long getVacantSlots(String type, String id) {
-        long max = sessionCalculator.calculateMaxActiveSessions();
-        long current = getTotalActiveCount(type, id);
-        return Math.max(0, max - current);
+    
+    /**
+     * 특정 사용자의 대기열 순위 조회
+     */
+    public Long getUserWaitingRank(String type, String id, String sessionId, String requestId) {
+        String member = requestId + ":" + sessionId;
+        return zSetOps.rank(waitingQueueKey(type, id), member);
     }
 
     /**
-     * 🔹 특정 사용자의 현재 대기 순위 조회
+     * 빈 자리 개수 계산 (QueueProcessor에서 사용)
+     */
+    public long getVacantSlots(String type, String id) {
+        long maxSessions = sessionCalculator.calculateMaxActiveSessions();
+        long currentSessions = getTotalActiveCount(type, id);
+        return Math.max(0, maxSessions - currentSessions);
+    }
+
+    /**
+     * 활성 대기열이 있는 영화 ID 목록 조회 (QueueProcessor에서 사용)
+     */
+    public Set<String> getActiveQueueMovieIds() {
+        Set<String> waitingMovies = setOps.members(WAITING_MOVIES);
+        return waitingMovies != null ? waitingMovies : Collections.emptySet();
+    }
+
+    /**
+     * 모든 대기자의 순위 정보 조회 (QueueProcessor에서 사용)
      */
     public Map<String, Long> getAllUserRanks(String type, String id) {
         String waitingKey = waitingQueueKey(type, id);
         Set<String> members = zSetOps.range(waitingKey, 0, -1);
         
-        if (members == null) {
-            return Collections.emptyMap();
-        }
-        
-        Map<String, Long> ranks = new LinkedHashMap<>();
-        long rank = 1;
-        for (String member : members) {
-            // member는 "requestId:sessionId" 형태
-            String requestId = member.split(":")[0];
-            ranks.put(requestId, rank++);
+        Map<String, Long> ranks = new HashMap<>();
+        if (members != null) {
+            long rank = 1;
+            for (String member : members) {
+                String[] parts = member.split(":", 2);
+                if (parts.length >= 1) {
+                    ranks.put(parts[0], rank); // requestId를 키로 사용
+                }
+                rank++;
+            }
         }
         return ranks;
-    }
-
-    public Set<String> getActiveQueueMovieIds() {
-        try {
-            Set<String> movieIds = setOps.members(WAITING_MOVIES);
-            if (movieIds == null) {
-                return Collections.emptySet();
-            }
-            logger.debug("대기열이 있는 영화 {}개 조회됨", movieIds.size());
-            return movieIds;
-        } catch (Exception e) {
-            logger.error("대기열 영화 ID 조회 중 오류 발생", e);
-            return Collections.emptySet();
-        }
-    }
-
-    public Set<String> getAllActiveMovieIds() {
-        try {
-            Set<String> movieIds = setOps.members(ACTIVE_MOVIES);
-            return movieIds != null ? movieIds : Collections.emptySet();
-        } catch (Exception e) {
-            logger.error("활성 영화 ID 조회 중 오류 발생", e);
-            return Collections.emptySet();
-        }
     }
 
     private String activeSessionsKey(String type, String id) {
