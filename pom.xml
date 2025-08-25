@@ -48,13 +48,6 @@
     <dependencies>
         <!-- ========== Kubernetes Related Dependencies ========== -->
         
-        <!-- Fabric8 Kubernetes Client (More Stable) -->
-        <dependency>
-            <groupId>io.fabric8</groupId>
-            <artifactId>kubernetes-client</artifactId>
-            <version>${fabric8.version}</version>
-        </dependency>
-        
         <!-- ========== AWS Related Dependencies ========== -->
         
         <!-- Kinesis SDK -->
