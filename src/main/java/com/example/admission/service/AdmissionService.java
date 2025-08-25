@@ -1,5 +1,9 @@
 package com.example.admission.service;
-
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
 import com.example.admission.dto.EnterResponse;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -154,42 +158,58 @@ public class AdmissionService {
     return movieIds;
 }
         
+    // AdmissionService.java의 admitUsersFromQueue() 메서드를 다음과 같이 교체하세요:
+
     public Map<String, String> admitUsersFromQueue(String type, String id, long count) {
         String waitingQueueKey = "waiting_queue:" + type + ":" + id;
         String activeSessionsKey = "active_sessions:" + type + ":" + id;
-        String activeUsersKey = "active_users:" + type + ":" + id;
+        String activeUsersKeyPrefix = "active_users:" + type + ":" + id + ":";
 
-        String script =
-            "local members = redis.call('zrange', KEYS[1], 0, ARGV[1]-1); " +
-            "if #members == 0 then return {} end; " +
-            "local result = {}; " +
-            "for i, member in ipairs(members) do " +
-            "    redis.call('sadd', KEYS[2], member); " +
-            "    redis.call('set', KEYS[3] .. ':' .. member, '1', 'EX', ARGV[2]); " +
-            "    table.insert(result, member); " +
-            "end; " +
-            "redis.call('zremrangebyrank', KEYS[1], 0, #members-1); " +
-            "return result; ";
-        
-        RedisScript<List> redisScript = new DefaultRedisScript<>(script, List.class);
-        
         try {
-            List<String> admittedMembers = (List<String>) redisTemplate.execute(redisScript,
-                    List.of(waitingQueueKey, activeSessionsKey, activeUsersKey),
-                    String.valueOf(count),
-                    String.valueOf(sessionTimeoutSeconds));
-
-            if (admittedMembers == null || admittedMembers.isEmpty()) {
+            // ✅ CROSSSLOT 오류 해결: Lua 스크립트 대신 개별 Redis 명령 사용
+            
+            // 1. 대기열에서 입장할 사용자들을 가져옴
+            Set<String> membersToAdmit = zSetOps.range(waitingQueueKey, 0, count - 1);
+            
+            if (membersToAdmit == null || membersToAdmit.isEmpty()) {
                 return Collections.emptyMap();
             }
-
+            
             Map<String, String> resultMap = new HashMap<>();
-            for (String member : admittedMembers) {
-                String[] parts = member.split(":", 2);
-                if (parts.length == 2) {
-                    resultMap.put(parts[0], parts[1]);
+            List<String> admittedMembers = new ArrayList<>();
+            
+            // 2. 각 사용자를 개별적으로 처리
+            for (String member : membersToAdmit) {
+                try {
+                    // 활성 세션에 추가
+                    setOps.add(activeSessionsKey, member);
+                    
+                    // 타임아웃 키 설정
+                    redisTemplate.opsForValue().set(
+                        activeUsersKeyPrefix + member, 
+                        "1", 
+                        Duration.ofSeconds(sessionTimeoutSeconds)
+                    );
+                    
+                    // 결과 맵에 추가
+                    String[] parts = member.split(":", 2);
+                    if (parts.length == 2) {
+                        resultMap.put(parts[0], parts[1]); // requestId -> sessionId
+                    }
+                    
+                    admittedMembers.add(member);
+                    
+                } catch (Exception e) {
+                    logger.warn("사용자 입장 처리 중 오류 ({}): {}", member, e.getMessage());
                 }
             }
+            
+            // 3. 성공적으로 처리된 사용자들을 대기열에서 제거
+            if (!admittedMembers.isEmpty()) {
+                zSetOps.remove(waitingQueueKey, admittedMembers.toArray());
+                logger.info("[{}] 대기열에서 {}명을 활성세션으로 이동 완료", id, admittedMembers.size());
+            }
+            
             return resultMap;
             
         } catch (Exception e) {
