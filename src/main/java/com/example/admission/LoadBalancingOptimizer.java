@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import java.net.InetAddress;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 @Service
 public class LoadBalancingOptimizer {
@@ -43,9 +44,6 @@ public class LoadBalancingOptimizer {
         }
     }
 
-    /**
-     * Redis에 현재 Pod 등록
-     */
     private void registerPod() {
         try {
             String key = "load_balancer:active_pods";
@@ -58,12 +56,9 @@ public class LoadBalancingOptimizer {
         }
     }
 
-    /**
-     * 특정 영화에 대한 처리 담당 Pod 결정
-     */
     public boolean shouldProcessMovie(String movieId) {
         if (!enableLoadBalancing) {
-            return true; // 부하 분산 비활성화 시 모든 Pod가 처리
+            return true;
         }
 
         try {
@@ -79,12 +74,13 @@ public class LoadBalancingOptimizer {
         }
     }
 
-    /**
-     * Round Robin 방식: 영화 ID를 순환하며 Pod에 할당
-     */
     private boolean shouldProcessRoundRobin(String movieId) {
         List<String> activePods = getActivePods();
-        if (activePods.isEmpty()) return true;
+        if (activePods.isEmpty() || !activePods.contains(podId)) {
+             // Pod 목록이 비었거나 내가 아직 목록에 없다면, 잠시 후 다시 시도하도록 false 반환
+             logger.warn("활성 Pod 목록에 현재 Pod({})이 없습니다. 목록: {}", podId, activePods);
+             return false;
+        }
         
         int movieHash = Math.abs(movieId.hashCode());
         int assignedPodIndex = movieHash % activePods.size();
@@ -99,14 +95,12 @@ public class LoadBalancingOptimizer {
         return shouldProcess;
     }
 
-    /**
-     * Hash 기반 방식: 영화 ID 해시를 통한 일관된 할당
-     */
     private boolean shouldProcessHashBased(String movieId) {
         List<String> activePods = getActivePods();
-        if (activePods.isEmpty()) return true;
+         if (activePods.isEmpty() || !activePods.contains(podId)) {
+             return false;
+        }
         
-        // Consistent Hashing 구현
         int targetHash = Math.abs(movieId.hashCode());
         String assignedPod = activePods.stream()
             .min(Comparator.comparingInt(pod -> 
@@ -116,21 +110,20 @@ public class LoadBalancingOptimizer {
         return podId.equals(assignedPod);
     }
 
-    /**
-     * 최소 부하 방식: 현재 처리량이 가장 적은 Pod가 처리
-     */
     private boolean shouldProcessLeastLoaded(String movieId) {
         try {
-            // 현재 Pod의 작업 부하 확인
             int myLoad = getCurrentPodLoad();
             
-            // 다른 Pod들의 부하와 비교
             List<String> activePods = getActivePods();
+            if (activePods.isEmpty() || !activePods.contains(podId)) {
+                return false;
+            }
+
             for (String otherPod : activePods) {
                 if (!otherPod.equals(podId)) {
                     int otherLoad = getPodLoad(otherPod);
                     if (otherLoad < myLoad) {
-                        return false; // 다른 Pod가 더 적게 부하 받고 있음
+                        return false;
                     }
                 }
             }
@@ -140,32 +133,28 @@ public class LoadBalancingOptimizer {
             
         } catch (Exception e) {
             logger.error("최소 부하 계산 중 오류", e);
-            return shouldProcessRoundRobin(movieId); // Fallback
+            return shouldProcessRoundRobin(movieId);
         }
     }
 
+    // ★★★ 핵심 수정: Race Condition을 유발하던 로직을 제거하고, Redis의 데이터를 직접 신뢰하도록 변경
     private List<String> getActivePods() {
         try {
             String key = "load_balancer:active_pods";
             
-            // 5분 이상 오래된 Pod 정리
             long fiveMinutesAgo = System.currentTimeMillis() - (5 * 60 * 1000);
             redisTemplate.opsForZSet().removeRangeByScore(key, 0, fiveMinutesAgo);
             
             Set<String> pods = redisTemplate.opsForZSet().range(key, 0, -1);
-            List<String> result = pods != null ? new ArrayList<>(pods) : new ArrayList<>();
-            
-            // 현재 Pod이 목록에 없으면 추가
-            if (!result.contains(podId)) {
-                registerPod();
-                result.add(podId);
+            if (pods == null) {
+                return Collections.emptyList();
             }
-            
-            return result.stream().sorted().toList(); // 일관된 순서
+            // 모든 Pod가 동일한 순서의 리스트를 받도록 정렬
+            return pods.stream().sorted().collect(Collectors.toList());
             
         } catch (Exception e) {
             logger.error("활성 Pod 목록 조회 실패", e);
-            return List.of(podId); // Fallback: 자신만 반환
+            return List.of(podId); // Fallback
         }
     }
 
@@ -186,20 +175,16 @@ public class LoadBalancingOptimizer {
             String loadStr = redisTemplate.opsForValue().get(loadKey);
             return loadStr != null ? Integer.parseInt(loadStr) : 0;
         } catch (Exception e) {
-            return Integer.MAX_VALUE; // 조회 실패 시 높은 부하로 가정
+            return Integer.MAX_VALUE;
         }
     }
 
-    /**
-     * 현재 Pod의 작업 부하 업데이트
-     */
     public void updatePodLoad(int currentLoad) {
         try {
             String loadKey = "load_balancer:pod_load:" + podId;
             redisTemplate.opsForValue().set(loadKey, String.valueOf(currentLoad));
             redisTemplate.expire(loadKey, java.time.Duration.ofMinutes(10));
             
-            // 주기적으로 Pod 등록 갱신
             registerPod();
             
         } catch (Exception e) {
@@ -207,9 +192,6 @@ public class LoadBalancingOptimizer {
         }
     }
 
-    /**
-     * 부하 분산 상태 정보 반환
-     */
     public Map<String, Object> getLoadBalancingStatus() {
         Map<String, Object> status = new HashMap<>();
         
