@@ -34,11 +34,11 @@ public class AdmissionAdminController {
         return ResponseEntity.ok(sessionCalculator.getCalculationInfo());
     }
 
-    @Operation(summary = "특정 영화 세션 활용도 조회", description = "특정 영화의 현재 활성 세션 수와 최대 수용량을 확인합니다")
-    @GetMapping("/utilization/{movieId}")
-    public ResponseEntity<Map<String, Object>> getSessionUtilization(@PathVariable String movieId) {
-        // [오류 수정] 메소드 이름을 올바르게 변경합니다.
-        long currentActiveSessions = admissionService.getActiveSessionCount("movie", movieId);
+    @Operation(summary = "특정 영화의 세션 상태 조회", description = "특정 영화의 현재 활성 세션 수와 최대 수용 가능 수를 확인합니다")
+    @GetMapping("/status/{movieId}")
+    public ResponseEntity<Map<String, Object>> getMovieSessionStatus(@PathVariable String movieId) {
+        // ✨ 수정된 부분: 메소드 이름 변경
+        long currentActiveSessions = admissionService.getTotalActiveCount("movie", movieId);
         long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
         long vacantSlots = admissionService.getVacantSlots("movie", movieId);
         
