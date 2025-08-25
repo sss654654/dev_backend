@@ -85,8 +85,8 @@ spring:
   # ========== Redis 설정 ==========
   data:
     redis:
-      host: ${REDIS_HOST:localhost} # 기본값으로 localhost 사용
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST} # 기본값으로 localhost 사용
+      port: ${REDIS_PORT}
       timeout: 2000ms
       ssl:
         enabled: ${REDIS_SSL_ENABLED:false} # 로컬에서는 SSL 비활성화
@@ -175,6 +175,8 @@ spring:
   # ========== 운영용 Redis 설정 (SSL 활성화, 타임아웃/풀 확장) ==========
   data:
     redis:
+      host: ${REDIS_HOST:prod-cgv-redis-cluster-gfbhur.serverless.apn2.cache.amazonaws.com}
+      port: ${REDIS_PORT:6379}
       timeout: 5000ms
       ssl:
         enabled: true
