@@ -60,7 +60,7 @@ public class PodDiscoveryService {
                                       .execute();
 
             int podCount = list.getItems().size();
-            // 이제 Java에서 수동으로 필터링할 필요 없이,n Kubernetes API가 직접 필터링해주므로 훨씬 효율적입니다.
+            // 이제 Java에서 수동으로 필터링할 필요 없이,n K.ubernetes API가 직접 필터링해주므로 훨씬 효율적입니다.
             logger.info("Pod 수 조회 성공: '{}' 레이블을 가진 Pod {}개를 찾았습니다.", appLabel, podCount);
             return podCount;
 
