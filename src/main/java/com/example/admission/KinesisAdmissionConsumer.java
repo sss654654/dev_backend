@@ -1,5 +1,6 @@
 package com.example.admission;
 
+import com.example.admission.ws.WebSocketUpdateService; // ★ 수정: WebSocketUpdateService import
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -7,7 +8,6 @@ import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.kinesis.KinesisClient;
 import software.amazon.awssdk.services.kinesis.model.DescribeStreamRequest;
@@ -20,7 +20,6 @@ import software.amazon.awssdk.services.kinesis.model.Record;
 import software.amazon.awssdk.services.kinesis.model.Shard;
 import software.amazon.awssdk.services.kinesis.model.ShardIteratorType;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,9 +31,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class KinesisAdmissionConsumer {
 
     private static final Logger logger = LoggerFactory.getLogger(KinesisAdmissionConsumer.class);
-    
+
     private final KinesisClient kinesisClient;
-    private final SimpMessagingTemplate messagingTemplate;
+    private final WebSocketUpdateService webSocketUpdateService; // ★ 수정: SimpMessagingTemplate 대신 WebSocketUpdateService 사용
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread consumerThread;
@@ -42,9 +41,10 @@ public class KinesisAdmissionConsumer {
     @Value("${admission.kinesis-stream-name}")
     private String streamName;
 
-    public KinesisAdmissionConsumer(KinesisClient kinesisClient, SimpMessagingTemplate messagingTemplate) {
+    // ★ 수정: 생성자에서 WebSocketUpdateService를 주입받도록 변경
+    public KinesisAdmissionConsumer(KinesisClient kinesisClient, WebSocketUpdateService webSocketUpdateService) {
         this.kinesisClient = kinesisClient;
-        this.messagingTemplate = messagingTemplate;
+        this.webSocketUpdateService = webSocketUpdateService;
     }
 
     @PostConstruct
@@ -76,21 +76,21 @@ public class KinesisAdmissionConsumer {
      */
     private void consumeFromKinesis() {
         String shardIterator = null;
-        
+
         try {
             // 1. 스트림 정보 확인
             DescribeStreamRequest describeRequest = DescribeStreamRequest.builder()
                 .streamName(streamName)
                 .build();
-            
+
             DescribeStreamResponse describeResponse = kinesisClient.describeStream(describeRequest);
             List<software.amazon.awssdk.services.kinesis.model.Shard> shards = describeResponse.streamDescription().shards();
-            
+
             if (shards.isEmpty()) {
                 logger.warn("CONSUMER: 스트림에 샤드가 없습니다: {}", streamName);
                 return;
             }
-            
+
             // 2. 첫 번째 샤드의 iterator 가져오기 (LATEST로 시작)
             String shardId = shards.get(0).shardId();
             GetShardIteratorRequest iteratorRequest = GetShardIteratorRequest.builder()
@@ -98,12 +98,12 @@ public class KinesisAdmissionConsumer {
                 .shardId(shardId)
                 .shardIteratorType(ShardIteratorType.LATEST)
                 .build();
-            
+
             GetShardIteratorResponse iteratorResponse = kinesisClient.getShardIterator(iteratorRequest);
             shardIterator = iteratorResponse.shardIterator();
-            
+
             logger.info("CONSUMER: 샤드 Iterator 초기화 완료 - shardId: {}", shardId);
-            
+
             // 3. 메인 소비 루프
             while (running.get() && shardIterator != null) {
                 try {
@@ -111,23 +111,23 @@ public class KinesisAdmissionConsumer {
                         .shardIterator(shardIterator)
                         .limit(10) // 한 번에 최대 10개 레코드
                         .build();
-                    
+
                     GetRecordsResponse getRecordsResponse = kinesisClient.getRecords(getRecordsRequest);
                     List<software.amazon.awssdk.services.kinesis.model.Record> records = getRecordsResponse.records();
-                    
+
                     // 레코드가 있으면 처리
                     if (!records.isEmpty()) {
                         processKinesisRecords(records);
                     }
-                    
+
                     // 다음 iterator 업데이트
                     shardIterator = getRecordsResponse.nextShardIterator();
-                    
+
                     // 레코드가 없으면 잠시 대기
                     if (records.isEmpty()) {
                         Thread.sleep(1000); // 1초 대기
                     }
-                    
+
                 } catch (InterruptedException e) {
                     logger.info("CONSUMER: Consumer 인터럽트됨");
                     Thread.currentThread().interrupt();
@@ -137,7 +137,7 @@ public class KinesisAdmissionConsumer {
                     Thread.sleep(5000); // 오류 시 5초 대기 후 재시도
                 }
             }
-            
+
         } catch (Exception e) {
             logger.error("CONSUMER: Kinesis Consumer 초기화 실패", e);
         }
@@ -158,54 +158,32 @@ public class KinesisAdmissionConsumer {
      */
     private void handleRecord(String data) {
         logger.info("CONSUMER: Kinesis 레코드 수신 - {}", data);
-        
+
         try {
             Map<String, Object> message = objectMapper.readValue(data, new TypeReference<>() {});
             String action = (String) message.get("action");
 
             if ("ADMIT".equals(action)) {
                 String requestId = (String) message.get("requestId");
-                String movieId = (String) message.get("movieId");
-                String sessionId = (String) message.get("sessionId");
 
                 if (requestId == null) {
                     logger.warn("CONSUMER: requestId가 누락된 메시지: {}", data);
                     return;
                 }
 
-                logger.info("CONSUMER: ADMIT 이벤트 처리 - requestId: {}, movieId: {}", requestId, movieId);
-                
-                // WebSocket으로 사용자에게 입장 허가 알림 전송
-                sendAdmissionNotification(requestId, movieId, sessionId);
-                
+                logger.info("CONSUMER: ADMIT 이벤트 처리 - requestId: {}", requestId);
+
+                // ★ 수정: 중앙 서비스의 notifyAdmitted 메소드를 호출하여 알림 전송
+                webSocketUpdateService.notifyAdmitted(requestId);
+
             } else {
                 logger.debug("CONSUMER: 알 수 없는 액션: {}", action);
             }
-            
+
         } catch (Exception e) {
             logger.error("CONSUMER: 레코드 처리 실패 - data: {}", data, e);
         }
     }
 
-    /**
-     * WebSocket을 통해 사용자에게 입장 허가 알림 전송
-     */
-    private void sendAdmissionNotification(String requestId, String movieId, String sessionId) {
-        try {
-            String destination = "/topic/admit/" + requestId;
-            Map<String, Object> payload = Map.of(
-                "status", "ADMITTED",
-                "message", "입장이 허가되었습니다. 좌석을 선택해주세요.",
-                "movieId", movieId,
-                "sessionId", sessionId,
-                "timestamp", System.currentTimeMillis()
-            );
-
-            messagingTemplate.convertAndSend(destination, payload);
-            logger.info("CONSUMER: WebSocket 알림 전송 완료 - destination: {}", destination);
-            
-        } catch (Exception e) {
-            logger.error("CONSUMER: WebSocket 전송 실패 - requestId: {}", requestId, e);
-        }
-    }
+    // ★ 삭제: sendAdmissionNotification 메소드는 더 이상 필요 없으므로 완전히 삭제합니다.
 }

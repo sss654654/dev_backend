@@ -34,6 +34,7 @@ public class SessionTimeoutProcessor {
     @Value("${admission.session-timeout-seconds:30}")
     private long sessionTimeoutSeconds;
 
+    // ★ 수정: 생성자에서 LoadBalancingOptimizer를 주입받도록 변경
     public SessionTimeoutProcessor(RedisTemplate<String, String> redisTemplate,
                                      WebSocketUpdateService webSocketUpdateService,
                                      AdmissionMetricsService metricsService,
@@ -57,6 +58,11 @@ public class SessionTimeoutProcessor {
                 String movieId = extractMovieId(activeSessionsKey);
                 if (movieId == null) continue;
                 
+                // ★★★ 핵심 수정: 이 영화 처리가 내 담당인지 확인 ★★★
+                if (!loadBalancer.shouldProcessMovie(movieId)) {
+                    continue; // 내 담당이 아니면 건너뛰기
+                }
+
                 totalProcessedMovies++;
                 
                 Set<String> members = redisTemplate.opsForSet().members(activeSessionsKey);
@@ -64,7 +70,6 @@ public class SessionTimeoutProcessor {
 
                 List<String> expiredMembers = new ArrayList<>();
                 
-                // ✅ CROSSSLOT 오류 해결: multiGet() 대신 개별 조회
                 for (String member : members) {
                     try {
                         String timeoutKey = "active_users:movie:" + movieId + ":" + member;
@@ -74,7 +79,6 @@ public class SessionTimeoutProcessor {
                         }
                     } catch (Exception e) {
                         logger.warn("타임아웃 키 조회 중 오류 ({}): {}", member, e.getMessage());
-                        // 조회 실패한 키는 만료된 것으로 간주
                         expiredMembers.add(member);
                     }
                 }

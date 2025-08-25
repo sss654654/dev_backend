@@ -2,6 +2,7 @@ package com.example.admission;
 
 import com.example.admission.service.AdmissionService;
 import com.example.admission.service.DynamicSessionCalculator;
+import com.example.admission.service.LoadBalancingOptimizer; // ★ 추가: LoadBalancingOptimizer import
 import com.example.admission.ws.WebSocketUpdateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,18 +21,22 @@ public class QueueProcessor {
     private final WebSocketUpdateService webSocketUpdateService;
     private final DynamicSessionCalculator sessionCalculator;
     private final KinesisAdmissionProducer kinesisProducer;
+    private final LoadBalancingOptimizer loadBalancer; // ★ 추가: 로드 밸런서 필드
 
     @Value("${admission.use-kinesis:true}")
     private boolean useKinesis;
 
+    // ★ 수정: 생성자에서 LoadBalancingOptimizer를 주입받도록 변경
     public QueueProcessor(AdmissionService admissionService, 
                           WebSocketUpdateService webSocketUpdateService,
                           DynamicSessionCalculator sessionCalculator,
-                          KinesisAdmissionProducer kinesisProducer) {
+                          KinesisAdmissionProducer kinesisProducer,
+                          LoadBalancingOptimizer loadBalancer) {
         this.admissionService = admissionService;
         this.webSocketUpdateService = webSocketUpdateService;
         this.sessionCalculator = sessionCalculator;
         this.kinesisProducer = kinesisProducer;
+        this.loadBalancer = loadBalancer; // ★ 추가
     }
 
     @Scheduled(fixedDelayString = "${admission.queue-processor-interval-ms:2000}")
@@ -46,13 +51,19 @@ public class QueueProcessor {
 
         for (String movieId : movieIds) {
             try {
+                // ★★★ 핵심 수정: 이 영화 처리가 내 담당인지 확인 ★★★
+                if (!loadBalancer.shouldProcessMovie(movieId)) {
+                    continue; // 내 담당이 아니면 건너뛰기
+                }
                 processQueueForMovie(movieId);
             } catch (Exception e) {
                 logger.error("[{}] 대기열 처리 중 오류 발생", movieId, e);
             }
         }
         long duration = System.currentTimeMillis() - startTime;
-        logger.debug("전체 대기열 처리 완료. 소요시간: {}ms", duration);
+        if(duration > 100) { // 너무 짧은 로그는 제외
+             logger.debug("전체 대기열 처리 완료. 소요시간: {}ms", duration);
+        }
     }
     
     private void processQueueForMovie(String movieId) {
