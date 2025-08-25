@@ -208,3 +208,7 @@ logging:
     software.amazon.awssdk: INFO
     software.amazon.awssdk.request: DEBUG # 단, AWS API 요청은 디버깅을 위해 DEBUG 유지
     io.awspring.cloud: INFO
+
+kubernetes:
+  namespace: default # Pod이 배포된 Kubernetes 네임스페이스
+  app-label: app=cgv-api # 조회할 Pod들이 공통으로 가지고 있는 Label
