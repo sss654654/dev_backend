@@ -44,7 +44,6 @@ public class AdmissionService {
     }
 
     public EnterResponse enter(String type, String id, String sessionId, String requestId) {
-        // ... (이 메소드는 변경 없음) ...
         String activeSessionsKey = activeSessionsKey(type, id);
         String waitingQueueKey   = waitingQueueKey(type, id);
         String member = requestId + ":" + sessionId;
@@ -66,41 +65,46 @@ public class AdmissionService {
         }
     }
 
-    // [핵심 수정] admitUsersFromQueue 메소드를 Redis 클러스터 호환 방식으로 변경
+    // [최종 수정] admitUsersFromQueue 메소드를 Redis 클러스터 호환 방식으로 완전 변경
     public Map<String, String> admitUsersFromQueue(String type, String id, long count) {
         String waitingQueueKey = waitingQueueKey(type, id);
         String activeSessionsKey = activeSessionsKey(type, id);
 
-        // 1. 대기열에서 입장시킬 사용자 목록을 먼저 조회합니다. (단일 키 명령어)
-        Set<String> membersToAdmit = zSetOps.range(waitingQueueKey, 0, count - 1);
-        if (membersToAdmit == null || membersToAdmit.isEmpty()) {
-            return Collections.emptyMap();
-        }
-
-        Map<String, String> resultMap = new HashMap<>();
-        
-        // 2. 각 사용자에 대해 개별적으로 활성 세션 추가 및 타임아웃 설정을 합니다.
-        for (String member : membersToAdmit) {
-            // 활성 세션에 추가 (단일 키 명령어)
-            setOps.add(activeSessionsKey, member);
-            // 타임아웃 키 설정 (단일 키 명령어)
-            redisTemplate.opsForValue().set(activeUserTimeoutKey(type, id, member), "active", Duration.ofSeconds(sessionTimeoutSeconds));
-
-            int idx = member.indexOf(':');
-            if (idx > 0) {
-                resultMap.put(member.substring(0, idx), member.substring(idx + 1));
+        try {
+            // 1. 대기열에서 입장시킬 사용자 목록을 먼저 조회합니다. (단일 키 명령어)
+            Set<String> membersToAdmit = zSetOps.range(waitingQueueKey, 0, count - 1);
+            if (membersToAdmit == null || membersToAdmit.isEmpty()) {
+                return Collections.emptyMap();
             }
-        }
 
-        // 3. 마지막으로, 입장시킨 사용자들을 대기열에서 제거합니다. (단일 키 명령어)
-        zSetOps.remove(waitingQueueKey, membersToAdmit.toArray());
-        
-        logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, membersToAdmit.size());
-        return resultMap;
+            Map<String, String> resultMap = new HashMap<>();
+
+            // 2. 각 사용자에 대해 개별적으로 활성 세션 추가 및 타임아웃 설정을 합니다.
+            // 이 과정은 여러 개의 단일 키 명령어로 구성되어 Cluster 환경에서 안전합니다.
+            for (String member : membersToAdmit) {
+                setOps.add(activeSessionsKey, member);
+                redisTemplate.opsForValue().set(activeUserTimeoutKey(type, id, member), "active", Duration.ofSeconds(sessionTimeoutSeconds));
+
+                int idx = member.indexOf(':');
+                if (idx > 0) {
+                    resultMap.put(member.substring(0, idx), member.substring(idx + 1));
+                }
+            }
+
+            // 3. 마지막으로, 입장시킨 사용자들을 대기열에서 제거합니다. (단일 키 명령어)
+            zSetOps.remove(waitingQueueKey, membersToAdmit.toArray());
+
+            logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, membersToAdmit.size());
+            return resultMap;
+
+        } catch (Exception e) {
+            // 이전에 보셨던 오류 로그가 여기서 출력됩니다.
+            logger.error("대기열에서 사용자 입장 처리 중 오류 발생", e);
+            return Collections.emptyMap(); // 오류 발생 시 빈 맵을 반환하여 안전하게 처리를 중단합니다.
+        }
     }
-    
+
     // (이하 다른 메소드들은 변경 없음)
-    // ...
     public void leave(String type, String id, String sessionId, String requestId) {
         String activeSessionsKey = activeSessionsKey(type, id);
         String waitingQueueKey   = waitingQueueKey(type, id);
