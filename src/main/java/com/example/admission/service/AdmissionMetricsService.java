@@ -111,18 +111,40 @@ public class AdmissionMetricsService {
     }
     
     private Set<String> scanKeys(String pattern) {
-        Set<String> keys = new HashSet<>();
+    Set<String> keys = new HashSet<>();
+    try {
         redisTemplate.execute((RedisConnection connection) -> {
-            try (Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions().match(pattern).count(100).build())) {
-                while (cursor.hasNext()) {
-                    keys.add(new String(cursor.next(), StandardCharsets.UTF_8));
+            try {
+                ScanOptions options = ScanOptions.scanOptions()
+                        .match(pattern)
+                        .count(50)
+                        .build();
+                
+                try (Cursor<byte[]> cursor = connection.scan(options)) {
+                    while (cursor.hasNext()) {
+                        try {
+                            String key = new String(cursor.next(), StandardCharsets.UTF_8);
+                            keys.add(key);
+                        } catch (Exception e) {
+                            logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Redis SCAN cursor 처리 중 오류", e);
                 }
+            } catch (Exception e) {
+                logger.error("Redis SCAN 옵션 설정 중 오류", e);
             }
             return null;
         });
-        return keys;
+    } catch (Exception e) {
+        logger.error("Redis connection 실행 중 오류", e);
+        // 폴백: 빈 Set 반환
+        logger.warn("SCAN 실패로 빈 키 목록 반환");
     }
-
+    
+    return keys;
+}
     private long sumSetCardByPattern(String pattern) {
         long totalCount = 0;
         try {

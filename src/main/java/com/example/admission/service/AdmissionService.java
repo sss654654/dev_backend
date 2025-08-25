@@ -111,51 +111,49 @@ public class AdmissionService {
     // AdmissionService.java의 getActiveQueueMovieIds() 메서드를 다음과 같이 수정하세요:
 
     public Set<String> getActiveQueueMovieIds() {
-        Set<String> movieIds = new HashSet<>();
-        try {
-            redisTemplate.execute((RedisConnection connection) -> {
-                try {
-                    // ✅ SCAN 옵션 간소화 및 예외 처리 강화
-                    ScanOptions options = ScanOptions.scanOptions()
-                            .match("waiting_queue:movie:*")
-                            .count(50)  // count 값을 낮춤
-                            .build();
-                    
-                    try (Cursor<byte[]> cursor = connection.scan(options)) {
-                        while (cursor.hasNext()) {
-                            try {
-                                String key = new String(cursor.next(), StandardCharsets.UTF_8);
-                                if (key.startsWith("waiting_queue:movie:")) {
-                                    String movieId = key.substring("waiting_queue:movie:".length());
-                                    if (!movieId.isEmpty()) {
-                                        movieIds.add(movieId);
-                                    }
+    Set<String> movieIds = new HashSet<>();
+    try {
+        redisTemplate.execute((RedisConnection connection) -> {
+            try {
+                ScanOptions options = ScanOptions.scanOptions()
+                        .match("waiting_queue:movie:*")
+                        .count(50)
+                        .build();
+                
+                try (Cursor<byte[]> cursor = connection.scan(options)) {
+                    while (cursor.hasNext()) {
+                        try {
+                            String key = new String(cursor.next(), StandardCharsets.UTF_8);
+                            if (key.startsWith("waiting_queue:movie:")) {
+                                String movieId = key.substring("waiting_queue:movie:".length());
+                                if (!movieId.isEmpty()) {
+                                    movieIds.add(movieId);
                                 }
-                            } catch (Exception e) {
-                                logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
-                                // 개별 키 오류는 무시하고 계속 진행
                             }
+                        } catch (Exception e) {
+                            logger.warn("Redis SCAN 키 처리 중 오류: {}", e.getMessage());
                         }
-                    } catch (Exception e) {
-                        logger.error("Redis SCAN cursor 처리 중 오류", e);
                     }
                 } catch (Exception e) {
-                    logger.error("Redis SCAN 옵션 설정 중 오류", e);
+                    logger.error("Redis SCAN cursor 처리 중 오류", e);
                 }
-                return null;
-            });
-        } catch (Exception e) {
-            logger.error("Redis connection 실행 중 오류", e);
-            // ✅ 폴백: 하드코딩된 movieIds 반환 (테스트용)
-            movieIds.add("movie-avatar3");
-            movieIds.add("movie1");
-            logger.warn("SCAN 실패로 폴백 영화 목록 사용: {}", movieIds);
-        }
-        
-        logger.debug("활성 대기열 영화 IDs: {}", movieIds);
-        return movieIds;
+            } catch (Exception e) {
+                logger.error("Redis SCAN 옵션 설정 중 오류", e);
+            }
+            return null;
+        });
+    } catch (Exception e) {
+        logger.error("Redis connection 실행 중 오류", e);
+        // 폴백: 하드코딩된 movieIds 반환
+        movieIds.add("movie-avatar3");
+        movieIds.add("movie1");
+        logger.warn("SCAN 실패로 폴백 영화 목록 사용: {}", movieIds);
     }
     
+    logger.debug("활성 대기열 영화 IDs: {}", movieIds);
+    return movieIds;
+}
+        
     public Map<String, String> admitUsersFromQueue(String type, String id, long count) {
         String waitingQueueKey = "waiting_queue:" + type + ":" + id;
         String activeSessionsKey = "active_sessions:" + type + ":" + id;
