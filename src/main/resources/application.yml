@@ -128,7 +128,7 @@ logging:
     org.springframework.web: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-    software.amazon.awssdk: DEBUG
+    software.amazon.awssdk: INFO
     io.awspring.cloud: DEBUG
 
 # Swagger (API 문서) 설정
