@@ -26,7 +26,7 @@ public class KinesisAdmissionConsumer {
     private static final Logger logger = LoggerFactory.getLogger(KinesisAdmissionConsumer.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     
-    @Value("${admission.kinesis.stream-name:cgv-admission-queue}")
+    @Value("${admission.kinesis.stream-name:cgv-admission-stream}")
     private String streamName;
     
     @Value("${admission.kinesis.region:ap-northeast-2}")

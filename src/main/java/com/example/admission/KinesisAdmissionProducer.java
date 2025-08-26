@@ -25,7 +25,7 @@ public class KinesisAdmissionProducer {
     private final KinesisClient kinesisClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     
-    @Value("${admission.kinesis.stream-name:cgv-admission-queue}")
+    @Value("${admission.kinesis.stream-name:cgv-admission-stream}")
     private String streamName;
 
     public KinesisAdmissionProducer(KinesisClient kinesisClient) {
