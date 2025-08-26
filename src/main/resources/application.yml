@@ -196,7 +196,12 @@ spring:
   cloud:
     aws:
       kinesis:
+        enabled: true
         endpoint: https://kinesis.${AWS_REGION:ap-northeast-2}.amazonaws.com
+      credentials:
+        instance-profile: false # EC2 인스턴스 프로필 사용 안 함
+        web-identity-token-file: /var/run/secrets/eks.amazonaws.com/serviceaccount/token
+        role-arn: "arn:aws:iam::732739477448:role/dev-EKS-App-Role" # 사용할 IAM 역할 ARN
 
 # ========== 운영용 Admission Control 설정 (값 상향) ==========
 admission:
