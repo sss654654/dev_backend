@@ -2,6 +2,9 @@
 
 package com.example.admission.service;
 
+import org.springframework.data.redis.core.RedisCallback;
+import java.util.stream.Collectors;
+
 import com.example.admission.dto.EnterResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,36 +90,83 @@ public class AdmissionService {
         logger.info("[{}] 사용자 퇴장 처리 완료: {}:{}", id, requestId, sessionId);
     }
 
-    /**
-     * 대기열에서 다음 사용자들을 가져와 활성세션으로 승격
-     */
     public List<String> admitNextUsers(String type, String id, long count) {
-        String waitingKey = waitingQueueKey(type, id);
-        String activeKey = activeSessionsKey(type, id);
-        List<String> admittedUsers = new ArrayList<>();
-        
-        try {
-            Set<String> waitingUserMembers = zSetOps.range(waitingKey, 0, count - 1);
-            if (waitingUserMembers == null || waitingUserMembers.isEmpty()) {
-                return admittedUsers;
-            }
+    String waitingKey = waitingQueueKey(type, id);
+    String activeKey = activeSessionsKey(type, id);
+    List<String> admittedUsers = new ArrayList<>();
+    
+    try {
+        // ✅ 수정: 트랜잭션으로 처리하여 순위 꼬임 방지
+        List<Object> results = redisTemplate.execute((RedisCallback<List<Object>>) connection -> {
+            connection.multi(); // 트랜잭션 시작
             
-            for (String member : waitingUserMembers) {
-                Long removed = zSetOps.remove(waitingKey, member);
-                if (removed != null && removed > 0) {
-                    // ✅ [수정] 활성 세션 ZSet에 현재 시간을 score로 하여 추가
-                    zSetOps.add(activeKey, member, System.currentTimeMillis());
-                    admittedUsers.add(member);
-                    logger.info("[{}] 사용자 입장 처리 완료 - {} (대기열→활성세션)", id, member);
+            // 대기열에서 가장 앞에 있는 사용자들 조회
+            connection.zRange(waitingKey.getBytes(), 0, count - 1);
+            
+            return connection.exec(); // 트랜잭션 실행
+        });
+        
+        if (results != null && !results.isEmpty()) {
+            @SuppressWarnings("unchecked")
+            Set<byte[]> waitingUserBytes = (Set<byte[]>) results.get(0);
+            
+            if (waitingUserBytes != null && !waitingUserBytes.isEmpty()) {
+                List<String> waitingUsers = waitingUserBytes.stream()
+                    .map(String::new)
+                    .collect(Collectors.toList());
+                
+                // 각 사용자를 대기열에서 제거하고 활성세션으로 이동
+                for (String member : waitingUsers) {
+                    Long removed = zSetOps.remove(waitingKey, member);
+                    if (removed != null && removed > 0) {
+                        // 활성 세션 ZSet에 현재 시간을 score로 하여 추가
+                        zSetOps.add(activeKey, member, System.currentTimeMillis());
+                        admittedUsers.add(member);
+                        logger.info("[{}] 사용자 입장 처리 완료 - {} (대기열→활성세션)", id, member);
+                    }
+                }
+            }
+        }
+        
+        logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, admittedUsers.size());
+        return admittedUsers;
+        
+    } catch (Exception e) {
+        logger.error("[{}] 대기열 처리 중 오류 발생", id, e);
+        return admittedUsers;
+    }
+}
+
+    /**
+     * 🔧 모든 사용자 순위를 정확히 계산 (순위 꼬임 수정)
+     */
+    public Map<String, Long> getAllUserRanks(String type, String id) {
+        try {
+            String waitingKey = waitingQueueKey(type, id);
+            
+            // 대기열의 모든 사용자를 순위 순서로 조회
+            Set<ZSetOperations.TypedTuple<String>> rankedUsers = 
+                zSetOps.rangeWithScores(waitingKey, 0, -1);
+            
+            Map<String, Long> userRanks = new HashMap<>();
+            
+            if (rankedUsers != null) {
+                long rank = 1; // 1부터 시작
+                for (ZSetOperations.TypedTuple<String> tuple : rankedUsers) {
+                    String member = tuple.getValue();
+                    if (member != null) {
+                        String requestId = member.split(":")[0];
+                        userRanks.put(requestId, rank++);
+                    }
                 }
             }
             
-            logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, admittedUsers.size());
-            return admittedUsers;
+            logger.debug("[{}] 사용자 순위 계산 완료: {} 명", id, userRanks.size());
+            return userRanks;
             
         } catch (Exception e) {
-            logger.error("[{}] 대기열 처리 중 오류 발생", id, e);
-            return admittedUsers;
+            logger.error("대기 순위 계산 실패: movieId={}", id, e);
+            return new HashMap<>();
         }
     }
 
@@ -177,21 +227,48 @@ public class AdmissionService {
         return waitingMovies != null ? waitingMovies : Collections.emptySet();
     }
     
-    public Map<String, Long> getAllUserRanks(String type, String id) {
-        String waitingKey = waitingQueueKey(type, id);
-        Set<String> members = zSetOps.range(waitingKey, 0, -1);
-        
-        Map<String, Long> ranks = new HashMap<>();
-        if (members != null) {
-            long rank = 1;
-            for (String member : members) {
-                String[] parts = member.split(":", 2);
-                if (parts.length >= 1) {
-                    ranks.put(parts[0], rank);
-                }
-                rank++;
+    // AdmissionService.java에 추가할 메서드들
+
+    /**
+     * 사용자가 활성 세션에 있는지 확인
+     */
+    public boolean isInActiveSession(String type, String id, String member) {
+        try {
+            String activeKey = activeSessionsKey(type, id);
+            Double score = zSetOps.score(activeKey, member);
+            boolean isActive = score != null;
+            
+            if (isActive) {
+                logger.debug("✅ 활성세션 확인: {} - member: {}...", id, member.substring(0, 16));
             }
+            
+            return isActive;
+        } catch (Exception e) {
+            logger.error("❌ 활성세션 확인 실패: {}", id, e);
+            return false;
         }
-        return ranks;
     }
+
+    /**
+     * 사용자의 대기열 순위 조회
+     */
+    public Long getUserRank(String type, String id, String member) {
+        try {
+            String waitingKey = waitingQueueKey(type, id);
+            Long rank = zSetOps.rank(waitingKey, member);
+            
+            if (rank != null) {
+                // Redis rank는 0부터 시작하므로 1을 더해줌
+                rank = rank + 1;
+                logger.debug("📋 대기열 순위 조회: {} - member: {}..., rank: {}", 
+                            id, member.substring(0, 16), rank);
+            }
+            
+            return rank;
+        } catch (Exception e) {
+            logger.error("❌ 대기열 순위 조회 실패: {}", id, e);
+            return null;
+        }
+    }
+
 }
