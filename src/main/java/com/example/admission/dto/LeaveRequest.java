@@ -1,34 +1,21 @@
 package com.example.admission.dto;
 
-public class EnterRequest {
+public class LeaveRequest {
     private String movieId;
     private String sessionId;
     private String requestId;
 
     // 기본 생성자
-    public EnterRequest() {}
+    public LeaveRequest() {}
 
     // 생성자
-    public EnterRequest(String movieId, String sessionId, String requestId) {
+    public LeaveRequest(String movieId, String sessionId, String requestId) {
         this.movieId = movieId;
         this.sessionId = sessionId;
         this.requestId = requestId;
     }
 
-    // Record 스타일 메서드들 (컴파일 에러 해결)
-    public String movieId() {
-        return movieId;
-    }
-
-    public String sessionId() {
-        return sessionId;
-    }
-
-    public String requestId() {
-        return requestId;
-    }
-
-    // 일반적인 getter 메서드들
+    // Getters and Setters
     public String getMovieId() {
         return movieId;
     }

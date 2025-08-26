@@ -2,10 +2,14 @@ package com.example.admission.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
-@JsonInclude(JsonInclude.Include.NON_NULL) // null인 필드는 JSON에서 제외
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class EnterResponse {
 
-    public enum Status { SUCCESS, QUEUED, FAILED }
+    public enum Status { 
+        SUCCESS, 
+        QUEUED, 
+        ERROR  // ERROR 상태 추가
+    }
 
     private final Status status;
     private final String message;
@@ -13,6 +17,7 @@ public class EnterResponse {
     private final Long myRank;
     private final Long totalWaiting;
 
+    // 생성자
     public EnterResponse(Status status, String message, String requestId, Long myRank, Long totalWaiting) {
         this.status = status;
         this.message = message;
@@ -21,7 +26,28 @@ public class EnterResponse {
         this.totalWaiting = totalWaiting;
     }
     
-    // [오류 수정] 누락되었던 Getter 메소드들을 추가합니다.
+    // Getter 메서드들
+    public Status status() {
+        return status;
+    }
+
+    public String message() {
+        return message;
+    }
+
+    public String requestId() {
+        return requestId;
+    }
+
+    public Long myRank() {
+        return myRank;
+    }
+
+    public Long totalWaiting() {
+        return totalWaiting;
+    }
+
+    // Jackson을 위한 일반적인 getter들도 제공
     public Status getStatus() {
         return status;
     }

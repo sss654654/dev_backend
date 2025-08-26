@@ -71,16 +71,14 @@ public class QueueProcessor {
             List<String> admittedUsers = admissionService.admitNextUsers(type, movieId, admitCount);
 
             if (useKinesis) {
-                // ✅ 수정: publishAdmitEvents 메서드 사용 (올바른 메서드명)
                 kinesisProducer.publishAdmitEvents(admittedUsers, movieId);
-                logger.info("[{}] Kinesis로 {}명 입장 이벤트 전송 완료", movieId, admittedUsers.size());
             } else {
-                // Kinesis를 사용하지 않을 경우의 대체 로직
+                // WebSocket 직접 알림
                 admittedUsers.forEach(member -> {
                     String requestId = member.split(":")[0];
-                    webSocketUpdateService.notifyAdmitted(requestId);
+                    // notifyAdmitted → notifyAdmission으로 변경하고 movieId 파라미터 추가
+                    webSocketUpdateService.notifyAdmission(requestId, movieId);
                 });
-                logger.info("[{}] WebSocket으로 {}명 입장 알림 직접 전송 완료", movieId, admittedUsers.size());
             }
             
             updateWaitingRanks(type, movieId);
@@ -93,16 +91,12 @@ public class QueueProcessor {
     private void updateWaitingRanks(String type, String movieId) {
         try {
             Map<String, Long> userRanks = admissionService.getAllUserRanks(type, movieId);
-            if (userRanks.isEmpty()) {
-                logger.debug("[{}] 대기 중인 사용자 없음", movieId);
-                return;
-            }
-
-            userRanks.forEach((requestId, rank) -> {
-                webSocketUpdateService.notifyRankUpdate(requestId, rank);
-            });
+            long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
             
-            logger.debug("[{}] 순위 업데이트 전송 완료 - {} 명", movieId, userRanks.size());
+            userRanks.forEach((requestId, rank) -> {
+                // 파라미터 4개로 변경: requestId, "WAITING", rank, totalWaiting
+                webSocketUpdateService.notifyRankUpdate(requestId, "WAITING", rank, totalWaiting);
+            });
             
         } catch (Exception e) {
             logger.error("대기 순위 업데이트 실패: movieId={}", movieId, e);

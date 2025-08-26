@@ -2,120 +2,110 @@ package com.example.admission.controller;
 
 import com.example.admission.dto.EnterRequest;
 import com.example.admission.dto.EnterResponse;
+import com.example.admission.dto.LeaveRequest;
+import com.example.admission.dto.QueueStatusResponse;
 import com.example.admission.service.AdmissionService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Map;
-
 @RestController
 @RequestMapping("/api/admission")
+@Tag(name = "Admission API", description = "대기열 관리 API")
 public class AdmissionController {
-
+    
     private static final Logger logger = LoggerFactory.getLogger(AdmissionController.class);
     private final AdmissionService admissionService;
-
+    
     public AdmissionController(AdmissionService admissionService) {
         this.admissionService = admissionService;
     }
 
-    /**
-     * 🔹 대기열 진입 API
-     */
+    @Operation(summary = "대기열 진입", description = "영화 예매 대기열에 진입합니다")
     @PostMapping("/enter")
     public ResponseEntity<EnterResponse> enter(@RequestBody EnterRequest request) {
-        // 요청 파라미터 유효성 검사
-        if (request.getMovieId() == null || request.getMovieId().isBlank()) {
-            return ResponseEntity.badRequest().body(new EnterResponse(
-                EnterResponse.Status.FAILED, "movieId는 필수입니다.", null, null, null));
-        }
-
-        if (request.getSessionId() == null || request.getSessionId().isBlank()) {
-            return ResponseEntity.badRequest().body(new EnterResponse(
-                EnterResponse.Status.FAILED, "sessionId는 필수입니다.", null, null, null));
-        }
-
-        if (request.getRequestId() == null || request.getRequestId().isBlank()) {
-            return ResponseEntity.badRequest().body(new EnterResponse(
-                EnterResponse.Status.FAILED, "requestId는 필수입니다.", null, null, null));
-        }
-
-        logger.info("🎬 대기열 진입 요청 - movieId: {}, requestId: {}", 
-                   request.getMovieId(), request.getRequestId().substring(0, 8) + "...");
-
-        // ✅ 올바른 메서드명: enter 사용
-        EnterResponse result = admissionService.enter(
-                "movie", // 타입은 'movie'로 고정
-                request.getMovieId(),
-                request.getSessionId(),
-                request.getRequestId()
-        );
-
-        // 응답 상태에 따른 HTTP 상태 코드 반환
-        if (result.getStatus() == EnterResponse.Status.QUEUED) {
-            logger.info("📋 대기열 등록 - requestId: {}, 순위: {}", 
-                       request.getRequestId().substring(0, 8) + "...", result.getMyRank());
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
-        } else if (result.getStatus() == EnterResponse.Status.SUCCESS) {
-            logger.info("✅ 즉시 입장 - requestId: {}", 
-                       request.getRequestId().substring(0, 8) + "...");
-            return ResponseEntity.ok(result);
-        } else {
-            logger.error("❌ 입장 실패 - requestId: {}, 메시지: {}", 
-                        request.getRequestId().substring(0, 8) + "...", result.getMessage());
-            return ResponseEntity.badRequest().body(result);
+        logger.info("🎬 대기열 진입 요청 - movieId: {}, requestId: {}...", 
+                   request.movieId(), request.requestId().substring(0, 8));
+        
+        try {
+            EnterResponse response = admissionService.enter("movie", request.movieId(), 
+                                                          request.sessionId(), request.requestId());
+            
+            if (response.status() == EnterResponse.Status.SUCCESS) {
+                logger.info("✅ 즉시 입장 - requestId: {}...", request.requestId().substring(0, 8));
+                return ResponseEntity.ok(response);
+            } else {
+                logger.info("📋 대기열 등록 - requestId: {}..., 순위: {}", 
+                           request.requestId().substring(0, 8), response.myRank());
+                return ResponseEntity.accepted().body(response);
+            }
+            
+        } catch (Exception e) {
+            logger.error("❌ 대기열 진입 중 오류 발생", e);
+            return ResponseEntity.internalServerError()
+                    .body(new EnterResponse(EnterResponse.Status.ERROR, 
+                                          "서버 내부 오류가 발생했습니다.", 
+                                          request.requestId(), null, null));
         }
     }
 
-    /**
-     * 🔹 대기열 퇴장 API
-     */
-    @PostMapping("/leave")
-    public ResponseEntity<Void> leave(@RequestBody EnterRequest request) {
-        if (request.getMovieId() == null || request.getSessionId() == null || request.getRequestId() == null) {
-            logger.warn("⚠️ 퇴장 요청 실패 - 필수 파라미터 누락");
-            return ResponseEntity.badRequest().build();
-        }
-        
-        logger.info("🚪 퇴장 처리 - movieId: {}, requestId: {}", 
-                   request.getMovieId(), request.getRequestId().substring(0, 8) + "...");
-        
-        admissionService.leave(
-                "movie",
-                request.getMovieId(),
-                request.getSessionId(),
-                request.getRequestId()
-        );
-        
-        logger.info("✅ 퇴장 완료 - requestId: {}", 
-                   request.getRequestId().substring(0, 8) + "...");
-        
+    @Operation(summary = "대기열 퇴장", description = "대기열에서 퇴장합니다")
+   // AdmissionController.java의 leave 메서드 수정:
+
+@PostMapping("/leave")
+public ResponseEntity<Void> leave(@RequestBody LeaveRequest request) {
+    logger.info("대기열 퇴장 요청 - movieId: {}, requestId: {}...", 
+               request.getMovieId(), request.getRequestId().substring(0, 8));
+    
+    try {
+        admissionService.leave("movie", request.getMovieId(), 
+                             request.getSessionId(), request.getRequestId());
         return ResponseEntity.ok().build();
+    } catch (Exception e) {
+        logger.error("대기열 퇴장 중 오류 발생", e);
+        return ResponseEntity.internalServerError().build();
     }
-
-    /**
-     * 🔹 새로운 기능: 현재 순위 조회 API (선택사항)
-     */
-    @GetMapping("/position")
-    public ResponseEntity<Map<String, Object>> getCurrentPosition(
-            @RequestParam String movieId,
-            @RequestParam String requestId) {
+}
+    @Operation(summary = "대기열 상태 조회", description = "현재 대기 순위와 총 대기자 수를 조회합니다")
+    @GetMapping("/status/{movieId}/{requestId}")
+    public ResponseEntity<QueueStatusResponse> getQueueStatus(
+            @PathVariable String movieId,
+            @PathVariable String requestId,
+            @RequestParam String sessionId) {
         
-        Map<String, Long> userRanks = admissionService.getAllUserRanks("movie", movieId);
-        Long myRank = userRanks.get(requestId);
-        long totalWaiting = admissionService.getTotalWaitingCount("movie", movieId);
+        logger.info("📊 대기열 상태 조회 - movieId: {}, requestId: {}...", 
+                   movieId, requestId.substring(0, 8));
         
-        Map<String, Object> response = Map.of(
-            "movieId", movieId,
-            "requestId", requestId,
-            "currentRank", myRank != null ? myRank : -1,
-            "totalWaiting", totalWaiting,
-            "status", myRank != null ? "WAITING" : "NOT_FOUND"
-        );
-        
-        return ResponseEntity.ok(response);
+        try {
+            // 현재 대기 순위 조회
+            Long rank = admissionService.getUserWaitingRank("movie", movieId, sessionId, requestId);
+            
+            if (rank == null) {
+                // 대기열에 없으면 활성 세션인지 확인
+                boolean isActive = admissionService.isUserInActiveSession("movie", movieId, sessionId, requestId);
+                if (isActive) {
+                    return ResponseEntity.ok(QueueStatusResponse.admitted());
+                } else {
+                    return ResponseEntity.notFound().build();
+                }
+            }
+            
+            // 총 대기자 수 조회
+            long totalWaiting = admissionService.getTotalWaitingCount("movie", movieId);
+            
+            QueueStatusResponse response = QueueStatusResponse.waiting(rank + 1, totalWaiting);
+            
+            logger.info("📊 상태 조회 결과 - requestId: {}..., 순위: {}/{}", 
+                       requestId.substring(0, 8), rank + 1, totalWaiting);
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            logger.error("❌ 대기열 상태 조회 중 오류 발생", e);
+            return ResponseEntity.internalServerError().build();
+        }
     }
 }

@@ -1,7 +1,7 @@
 package com.example.admission.service;
 
 import com.example.admission.dto.EnterResponse;
-import jakarta.annotation.PostConstruct;
+import com.example.admission.service.DynamicSessionCalculator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,57 +18,48 @@ import java.util.*;
 public class AdmissionService {
 
     private static final Logger logger = LoggerFactory.getLogger(AdmissionService.class);
-
-    private static final String ACTIVE_MOVIES = "active_movies";
     private static final String WAITING_MOVIES = "waiting_movies";
 
-    @Value("${admission.session-timeout-seconds:30}")
-    private long sessionTimeoutSeconds;
-
     private final RedisTemplate<String, String> redisTemplate;
+    private final SetOperations<String, String> setOps;
+    private final ZSetOperations<String, String> zSetOps;
     private final DynamicSessionCalculator sessionCalculator;
 
-    private ZSetOperations<String, String> zSetOps;
-    private SetOperations<String, String> setOps;
+    @Value("${admission.session.timeout:300}")
+    private long sessionTimeoutSeconds;
 
-    public AdmissionService(RedisTemplate<String, String> redisTemplate, 
-                           DynamicSessionCalculator sessionCalculator) {
+    public AdmissionService(RedisTemplate<String, String> redisTemplate,
+                          DynamicSessionCalculator sessionCalculator) {
         this.redisTemplate = redisTemplate;
+        this.setOps = redisTemplate.opsForSet();
+        this.zSetOps = redisTemplate.opsForZSet();
         this.sessionCalculator = sessionCalculator;
     }
 
-    @PostConstruct
-    public void init() {
-        this.zSetOps = redisTemplate.opsForZSet();
-        this.setOps = redisTemplate.opsForSet();
-    }
-
     /**
-     * 대기열 진입/즉시 입장 처리 - 활성세션은 Set으로 변경
+     * 대기열 진입 로직
      */
     public EnterResponse enter(String type, String id, String sessionId, String requestId) {
-        setOps.add(ACTIVE_MOVIES, id);
-        long maxActiveSessions = sessionCalculator.calculateMaxActiveSessions();
-        long currentActiveSessions = getTotalActiveCount(type, id);
-
+        long maxSessions = sessionCalculator.calculateMaxActiveSessions();
+        long currentSessions = getTotalActiveCount(type, id);
+        
         logger.info("[{}] 입장 요청 - 현재 활성세션: {}/{}, 요청자: {}:{}", 
-                    id, currentActiveSessions, maxActiveSessions, requestId, sessionId);
+                   id, currentSessions, maxSessions, requestId, sessionId);
 
-        if (currentActiveSessions < maxActiveSessions) {
-            // 활성 세션은 Set으로 관리 (SessionTimeoutProcessor와 일관성 유지)
+        if (currentSessions < maxSessions) {
+            // 즉시 입장 - 활성 세션으로 등록
             String activeKey = activeSessionsKey(type, id);
             String member = requestId + ":" + sessionId;
-
             setOps.add(activeKey, member);
 
-            // TTL 키 설정으로 30초 후 자동 만료 감지
+            // 활성 세션에 TTL 설정
             String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
             redisTemplate.opsForValue().set(timeoutKey, "1", Duration.ofSeconds(sessionTimeoutSeconds));
 
-            logger.info("[{}] 즉시 입장 허가 - 현재 활성세션: {}/{}", id, currentActiveSessions + 1, maxActiveSessions);
-            return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장되었습니다.", requestId, null, null);
+            logger.info("[{}] 즉시 입장 허가 - 현재 활성세션: {}/{}", id, currentSessions + 1, maxSessions);
+            return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장 허가되었습니다.", requestId, null, null);
         } else {
-            // 대기열은 ZSet으로 관리 (순서 보장)
+            // 대기열 등록
             setOps.add(WAITING_MOVIES, id);
             String waitingKey = waitingQueueKey(type, id);
             String member = requestId + ":" + sessionId;
@@ -157,6 +148,15 @@ public class AdmissionService {
     public Long getUserWaitingRank(String type, String id, String sessionId, String requestId) {
         String member = requestId + ":" + sessionId;
         return zSetOps.rank(waitingQueueKey(type, id), member);
+    }
+
+    /**
+     * 사용자가 활성 세션에 있는지 확인
+     */
+    public boolean isUserInActiveSession(String type, String id, String sessionId, String requestId) {
+        String member = requestId + ":" + sessionId;
+        Boolean isMember = setOps.isMember(activeSessionsKey(type, id), member);
+        return Boolean.TRUE.equals(isMember);
     }
 
     /**
