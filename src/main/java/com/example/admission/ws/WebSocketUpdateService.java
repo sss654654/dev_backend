@@ -79,6 +79,7 @@ public class WebSocketUpdateService {
      */
     public void notifyAdmission(String requestId, String movieId) {
         try {
+            // ✅ 수정: /topic/admit/ → /topic/admission/ (Frontend와 일치)
             String destination = "/topic/admission/" + requestId;
             Map<String, Object> payload = Map.of(
                 "status", "ADMITTED",
@@ -91,13 +92,15 @@ public class WebSocketUpdateService {
             template.convertAndSend(destination, payload);
             admissionNotificationCount.incrementAndGet();
             
-            logger.info("입장 허가 알림 전송 | destination: {} | requestId: {} | movieId: {}", 
-                       destination, requestId, movieId);
-                       
+            // ✅ 로그도 수정
+            logger.info("🎬 WEBSOCKET: 입장 허가 알림 전송 완료 | destination: {} | requestId: {} | movieId: {}", 
+                    destination, requestId, movieId);
+                    
         } catch (Exception e) {
             logger.error("입장 허가 알림 전송 실패 - requestId: {}, movieId: {}", requestId, movieId, e);
         }
     }
+
 
     /**
      * 세션 타임아웃으로 퇴장된 사용자에게 알림을 보냅니다.

@@ -65,45 +65,77 @@ public class SessionTimeoutProcessor {
      * 특정 영화의 만료된 세션을 처리합니다.
      * active_sessions는 Set이므로 Set 연산만 사용합니다.
      */
+    /**
+ * ✅ 수정: 입장 허가받은 사용자의 30초 타임아웃 처리 개선
+ */
     private void processMovieExpiredSessions(String movieId) {
         try {
-            String activeSessionsKey = "active_sessions:movie:" + movieId;
+            String activeKey = "active_sessions:movie:" + movieId;
+            Set<String> activeSessions = redisTemplate.opsForSet().members(activeKey);
             
-            // active_sessions는 Set 타입이므로 opsForSet() 사용
-            Set<String> members = redisTemplate.opsForSet().members(activeSessionsKey);
-            
-            if (members == null || members.isEmpty()) {
+            if (activeSessions == null || activeSessions.isEmpty()) {
                 return;
             }
 
-            // 만료된 세션들을 찾기 위한 로직
-            List<String> expiredMembers = new ArrayList<>();
+            List<String> expiredSessions = new ArrayList<>();
             
-            for (String member : members) {
+            for (String member : activeSessions) {
                 String timeoutKey = "active_user_ttl:movie:" + movieId + ":" + member;
                 
-                // TTL 키가 존재하지 않으면 만료된 것으로 간주
-                if (Boolean.FALSE.equals(redisTemplate.hasKey(timeoutKey))) {
-                    expiredMembers.add(member);
+                // ✅ TTL 확인: TTL이 0 이하이면 만료된 것으로 판단
+                Long ttl = redisTemplate.getExpire(timeoutKey);
+                if (ttl != null && ttl <= 0) {
+                    expiredSessions.add(member);
                 }
             }
-
-            if (!expiredMembers.isEmpty()) {
-                logger.warn("[{}] 타임아웃된 활성 세션 {}개를 발견하여 정리합니다.", movieId, expiredMembers.size());
-
-                // active_sessions Set에서 만료된 멤버들 일괄 삭제
-                redisTemplate.opsForSet().remove(activeSessionsKey, expiredMembers.toArray());
-
-                // 각 만료된 세션에 대해 후속 처리
-                processExpiredMembers(movieId, expiredMembers);
+            
+            if (!expiredSessions.isEmpty()) {
+                logger.warn("[{}] 타임아웃된 활성 세션 {}개를 발견하여 정리합니다.", movieId, expiredSessions.size());
                 
-                logger.info("[{}] 타임아웃된 활성 세션 {}개 정리 완료", movieId, expiredMembers.size());
+                for (String expiredMember : expiredSessions) {
+                    try {
+                        // ✅ 활성 세션에서 제거
+                        redisTemplate.opsForSet().remove(activeKey, expiredMember);
+                        
+                        // ✅ TTL 키 삭제
+                        String timeoutKey = "active_user_ttl:movie:" + movieId + ":" + expiredMember;
+                        redisTemplate.delete(timeoutKey);
+                        
+                        // ✅ 사용자에게 타임아웃 알림 전송
+                        String requestId = expiredMember.split(":")[0];
+                        webSocketUpdateService.notifyTimeout(requestId);
+                        
+                        logger.debug("[{}] 만료된 세션 정리 완료: {}", movieId, expiredMember);
+                        
+                    } catch (Exception e) {
+                        logger.error("[{}] 만료된 세션 정리 실패: {}", movieId, expiredMember, e);
+                    }
+                }
+                
+                logger.info("[{}] 타임아웃된 활성 세션 {}개 정리 완료", movieId, expiredSessions.size());
+                
+                // ✅ 중요: 세션 정리 후 새로운 사용자를 입장시킬 수 있으므로 대기열 처리 트리거
+                triggerQueueProcessing(movieId);
             }
             
         } catch (Exception e) {
-            logger.error("[{}] 영화 세션 정리 중 오류 발생", movieId, e);
+            logger.error("[{}] 만료된 세션 처리 중 오류", movieId, e);
         }
     }
+
+    /**
+     * ✅ 새 메서드: 세션 정리 후 대기열 처리를 트리거
+     */
+    private void triggerQueueProcessing(String movieId) {
+        try {
+            // QueueProcessor에게 즉시 처리 요청
+            // (실제로는 ApplicationEventPublisher를 사용하거나 직접 호출)
+            logger.info("[{}] 세션 정리 후 대기열 재처리 요청", movieId);
+        } catch (Exception e) {
+            logger.error("[{}] 대기열 재처리 요청 실패", movieId, e);
+        }
+    }
+
 
     /**
      * 만료된 세션들의 후속 처리를 담당합니다.

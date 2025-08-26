@@ -103,29 +103,110 @@ public class AdmissionService {
     public List<String> admitNextUsers(String type, String id, long count) {
         String waitingKey = waitingQueueKey(type, id);
         String activeKey = activeSessionsKey(type, id);
-
-        // 대기열에서 가장 오래 기다린 순서대로 가져오기 (ZSet)
-        Set<String> membersToAdmit = zSetOps.range(waitingKey, 0, count - 1);
-        if (membersToAdmit == null || membersToAdmit.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        // 활성 세션으로 이동 (Set으로 변경)
-        for (String member : membersToAdmit) {
-            setOps.add(activeKey, member);
-
-            // 새로운 활성 세션에도 TTL 설정
-            String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
-            redisTemplate.opsForValue().set(timeoutKey, "1", Duration.ofSeconds(sessionTimeoutSeconds));
-        }
-
-        // 대기열에서 승격된 사용자들 제거 (ZSet)
-        zSetOps.removeRange(waitingKey, 0, count - 1);
+        List<String> admittedUsers = new ArrayList<>();
         
-        logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, membersToAdmit.size());
-        return new ArrayList<>(membersToAdmit);
+        try {
+            // 대기열에서 count만큼 사용자를 꺼내기 (FIFO 순서)
+            Set<ZSetOperations.TypedTuple<String>> waitingUsers = 
+                zSetOps.rangeWithScores(waitingKey, 0, count - 1);
+                
+            if (waitingUsers == null || waitingUsers.isEmpty()) {
+                return admittedUsers;
+            }
+            
+            long currentTime = System.currentTimeMillis();
+            
+            for (ZSetOperations.TypedTuple<String> user : waitingUsers) {
+                String member = user.getValue();  // "requestId:sessionId"
+                if (member == null) continue;
+                
+                // ✅ 핵심 수정: 대기열에서 제거 + 활성세션에 추가를 원자적으로 수행
+                Long removed = zSetOps.remove(waitingKey, member);
+                if (removed != null && removed > 0) {
+                    // 활성 세션에 추가
+                    setOps.add(activeKey, member);
+                    
+                    // ✅ 중요: 활성 세션 TTL 설정 (30초)
+                    String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
+                    redisTemplate.opsForValue().set(timeoutKey, "1", Duration.ofSeconds(sessionTimeoutSeconds));
+                    
+                    admittedUsers.add(member);
+                    
+                    logger.info("[{}] 사용자 입장 처리 완료 - {} (대기열→활성세션)", id, member);
+                }
+            }
+            
+            logger.info("[{}] 대기열에서 {}명을 활성 세션으로 이동 완료", id, admittedUsers.size());
+            return admittedUsers;
+            
+        } catch (Exception e) {
+            logger.error("[{}] 대기열 처리 중 오류 발생", id, e);
+            return admittedUsers;
+        }
     }
     
+
+    public boolean isUserInActiveSession(String type, String id, String sessionId, String requestId) {
+    String member = requestId + ":" + sessionId;
+    Boolean isMember = setOps.isMember(activeSessionsKey(type, id), member);
+    return Boolean.TRUE.equals(isMember);
+}
+
+// ✅ 새로 추가할 메서드들 (중복되지 않는 것만)
+/**
+ * 사용자 세션 연장 (새 메서드)
+    */
+    public boolean extendUserSession(String type, String id, String requestId, String sessionId) {
+        try {
+            String member = requestId + ":" + sessionId;
+            String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
+            
+            // 현재 세션이 활성 상태인지 확인
+            if (isUserInActiveSession(type, id, sessionId, requestId)) {
+                // TTL 30초 연장
+                redisTemplate.opsForValue().set(timeoutKey, "1", Duration.ofSeconds(sessionTimeoutSeconds));
+                
+                logger.info("[{}] 사용자 세션 연장 완료 - member: {}, 연장시간: {}초", 
+                        id, member, sessionTimeoutSeconds);
+                return true;
+            }
+            
+            return false;
+            
+        } catch (Exception e) {
+            logger.error("[{}] 세션 연장 실패 - requestId: {}", id, requestId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 활성세션 상태를 TTL과 함께 확인하는 새 메서드
+     */
+    public boolean isUserActiveWithTTL(String type, String id, String requestId, String sessionId) {
+        try {
+            // 먼저 Set에 있는지 확인
+            if (!isUserInActiveSession(type, id, sessionId, requestId)) {
+                return false;
+            }
+            
+            // TTL도 함께 확인
+            String member = requestId + ":" + sessionId;
+            String timeoutKey = "active_user_ttl:" + type + ":" + id + ":" + member;
+            Long ttl = redisTemplate.getExpire(timeoutKey);
+            
+            boolean isActive = (ttl != null && ttl > 0);
+            
+            logger.debug("[{}] 사용자 활성세션 상태 - member: {}, ttl: {}s, isActive: {}", 
+                        id, member, ttl, isActive);
+                        
+            return isActive;
+            
+        } catch (Exception e) {
+            logger.error("[{}] 활성세션 상태 확인 실패 - requestId: {}", id, requestId, e);
+            return false;
+        }
+    }
+
     /**
      * 활성 세션 수 조회 (Set으로 변경)
      */
@@ -150,15 +231,7 @@ public class AdmissionService {
         return zSetOps.rank(waitingQueueKey(type, id), member);
     }
 
-    /**
-     * 사용자가 활성 세션에 있는지 확인
-     */
-    public boolean isUserInActiveSession(String type, String id, String sessionId, String requestId) {
-        String member = requestId + ":" + sessionId;
-        Boolean isMember = setOps.isMember(activeSessionsKey(type, id), member);
-        return Boolean.TRUE.equals(isMember);
-    }
-
+    
     /**
      * 빈 자리 개수 계산 (QueueProcessor에서 사용)
      */

@@ -53,10 +53,15 @@ public class QueueProcessor {
         }
     }
     
+
+        
+    // ✅ 기존 processMovieQueue 메서드 수정 (불필요한 로직 제거)
     private void processMovieQueue(String type, String movieId) {
         try {
             long vacantSlots = admissionService.getVacantSlots(type, movieId);
             if (vacantSlots <= 0) {
+                // 빈자리가 없어도 순위 업데이트는 해야 함
+                updateWaitingRanks(type, movieId);
                 return;
             }
             
@@ -68,6 +73,7 @@ public class QueueProcessor {
             long admitCount = Math.min(vacantSlots, waitingCount);
             logger.info("[{}] 빈자리 {}개 발견! {}명 입장 처리 시작...", movieId, vacantSlots, admitCount);
             
+            // 입장 처리
             List<String> admittedUsers = admissionService.admitNextUsers(type, movieId, admitCount);
 
             if (useKinesis) {
@@ -76,12 +82,16 @@ public class QueueProcessor {
                 // WebSocket 직접 알림
                 admittedUsers.forEach(member -> {
                     String requestId = member.split(":")[0];
-                    // notifyAdmitted → notifyAdmission으로 변경하고 movieId 파라미터 추가
                     webSocketUpdateService.notifyAdmission(requestId, movieId);
                 });
             }
             
+            // 입장 처리 후 즉시 순위 업데이트 (남은 사용자들)
             updateWaitingRanks(type, movieId);
+            
+            // 전체 통계 브로드캐스트 (입장 처리 후)
+            long remainingWaiting = admissionService.getTotalWaitingCount(type, movieId);
+            webSocketUpdateService.broadcastQueueStats(movieId, remainingWaiting);
 
         } catch (Exception e) {
             logger.error("[{}] 대기열 처리 실패", movieId, e);
@@ -93,13 +103,51 @@ public class QueueProcessor {
             Map<String, Long> userRanks = admissionService.getAllUserRanks(type, movieId);
             long totalWaiting = admissionService.getTotalWaitingCount(type, movieId);
             
+            // ✅ 수정: 각 사용자에게 개별 순위 업데이트 전송
             userRanks.forEach((requestId, rank) -> {
-                // 파라미터 4개로 변경: requestId, "WAITING", rank, totalWaiting
                 webSocketUpdateService.notifyRankUpdate(requestId, "WAITING", rank, totalWaiting);
+                
+                // 디버그 로그 추가
+                logger.debug("[{}] 순위 업데이트 전송 - requestId: {}..., rank: {}/{}", 
+                            movieId, requestId.substring(0, 8), rank, totalWaiting);
             });
+            
+            // ✅ 추가: 순위 업데이트 완료 로그
+            if (!userRanks.isEmpty()) {
+                logger.info("[{}] 순위 업데이트 완료 - {}명에게 전송", movieId, userRanks.size());
+            }
             
         } catch (Exception e) {
             logger.error("대기 순위 업데이트 실패: movieId={}", movieId, e);
+        }
+    }
+    public void processUserAdmission(String type, String movieId, String requestId) {
+        try {
+            // ✅ 수정: 기존 admitNextUsers 메서드를 1명 단위로 호출
+            List<String> admittedUsers = admissionService.admitNextUsers(type, movieId, 1);
+            
+            if (!admittedUsers.isEmpty()) {
+                String admittedMember = admittedUsers.get(0);
+                String admittedRequestId = admittedMember.split(":")[0];
+                
+                // 요청한 사용자가 입장되었는지 확인
+                if (requestId.equals(admittedRequestId)) {
+                    // WebSocket 알림
+                    webSocketUpdateService.notifyAdmission(requestId, movieId);
+                    logger.info("[{}] 개별 사용자 입장 처리 완료 - requestId: {}", movieId, requestId);
+                } else {
+                    logger.warn("[{}] 요청한 사용자가 아닌 다른 사용자가 입장됨 - 요청: {}, 입장: {}", 
+                            movieId, requestId, admittedRequestId);
+                }
+                
+                // 나머지 사용자들 순위 업데이트
+                updateWaitingRanks(type, movieId);
+            } else {
+                logger.warn("[{}] 개별 입장 처리 실패 - 빈자리 없음 또는 대기자 없음", movieId);
+            }
+            
+        } catch (Exception e) {
+            logger.error("개별 사용자 입장 처리 실패 - requestId: {}, movieId: {}", requestId, movieId, e);
         }
     }
 
