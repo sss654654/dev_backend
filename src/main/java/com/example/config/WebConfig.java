@@ -17,6 +17,9 @@ public class WebConfig implements WebMvcConfigurer {
                         // CloudFront 도메인
                         "https://cgv.peacemaker.kr",
                         "http://cgv.peacemaker.kr",
+                        // API 도메인 추가 (중요!)
+                        "https://api.peacemaker.kr",
+                        "http://api.peacemaker.kr",
                         // 로컬 개발용
                         "http://localhost:3000",
                         "http://localhost:5173"
@@ -29,6 +32,9 @@ public class WebConfig implements WebMvcConfigurer {
                         // CloudFront 도메인
                         "https://cgv.peacemaker.kr",
                         "http://cgv.peacemaker.kr",
+                        // API 도메인 추가 (중요!)
+                        "https://api.peacemaker.kr",
+                        "http://api.peacemaker.kr",
                         // 로컬 개발용
                         "http://localhost:3000",
                         "http://localhost:5173"
