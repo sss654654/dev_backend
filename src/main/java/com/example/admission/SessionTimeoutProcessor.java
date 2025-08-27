@@ -33,7 +33,7 @@ public class SessionTimeoutProcessor {
         this.loadBalancer = loadBalancer;
     }
 
-    @Scheduled(fixedDelayString = "${admission.session-processor-interval-ms:5000}")
+    @Scheduled(fixedDelayString = "${admission.session-processor-interval-ms:2000}")
     public void processExpiredSessions() {
         try {
             // ✅ 이제 대기열이 있는 영화가 아닌, 활성 세션이 있는 모든 영화를 대상으로 해야 합니다.
