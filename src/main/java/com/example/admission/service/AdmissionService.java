@@ -18,8 +18,8 @@ import java.util.*;
 public class AdmissionService {
 
     private static final Logger logger = LoggerFactory.getLogger(AdmissionService.class);
-    // ✅ Redis 키 이름에 버전을 명시하여 기존 데이터와의 충돌을 완벽히 차단
-    private static final String WAITING_MOVIES = "waiting_movies_v2";
+    // ✅ 최종 안정 버전임을 나타내는 키 이름 사용
+    private static final String WAITING_MOVIES = "waiting_movies_final";
 
     private final RedisTemplate<String, String> redisTemplate;
     private final SetOperations<String, String> setOps;
@@ -36,17 +36,16 @@ public class AdmissionService {
         this.sessionCalculator = sessionCalculator;
     }
 
-    // ✅ 모든 키 생성 로직에 버전을 포함
-    private String activeSessionsKey(String type, String id) { return "active_sessions_zset_v2:" + type + ":" + id; }
-    private String waitingQueueKey(String type, String id) { return "waiting_queue_v2:" + type + ":" + id; }
+    private String activeSessionsKey(String type, String id) { return "active_sessions_zset_final:" + type + ":" + id; }
+    private String waitingQueueKey(String type, String id) { return "waiting_queue_final:" + type + ":" + id; }
 
     public EnterResponse enter(String type, String id, String sessionId, String requestId) {
         String member = requestId + ":" + sessionId;
         String activeKey = activeSessionsKey(type, id);
         String waitingKey = waitingQueueKey(type, id);
-        String lockKey = "lock:admission_v2:" + type + ":" + id;
+        String lockKey = "lock:admission_final:" + type + ":" + id;
 
-        // ✅ 분산 락으로 동시성 문제 완벽 해결
+        // 분산 락으로 동시성 문제 해결
         if (Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(lockKey, "locked", Duration.ofSeconds(3)))) {
             try {
                 long maxSessions = sessionCalculator.calculateMaxActiveSessions();
@@ -55,7 +54,7 @@ public class AdmissionService {
                 if (currentSessions < maxSessions) {
                     zSetOps.add(activeKey, member, System.currentTimeMillis());
                     setOps.add(WAITING_MOVIES, id);
-                    logger.info("✅ [{}] 즉시 입장 허가 (현재: {}/{})", id, currentSessions + 1, maxSessions);
+                    logger.info("✅ [{}] 즉시 입장 (현재: {}/{})", id, currentSessions + 1, maxSessions);
                     return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장", requestId, null, null);
                 }
             } finally {
@@ -75,6 +74,8 @@ public class AdmissionService {
     public List<String> admitNextUsers(String type, String id, long count) {
         String waitingKey = waitingQueueKey(type, id);
         String activeKey = activeSessionsKey(type, id);
+        
+        // ✅ [핵심 수정] 순서가 보장되는 LinkedHashSet으로 조회하여 FIFO 보장
         Set<String> waitingUsers = zSetOps.range(waitingKey, 0, count - 1);
 
         if (waitingUsers == null || waitingUsers.isEmpty()) return Collections.emptyList();
@@ -88,7 +89,7 @@ public class AdmissionService {
         }
         return admittedUsers;
     }
-    
+
     // ... 이하 다른 메서드들은 이전과 동일 ...
     public void leave(String type, String id, String sessionId, String requestId) {
         String member = requestId + ":" + sessionId;
