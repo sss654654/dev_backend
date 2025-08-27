@@ -44,7 +44,6 @@ public class AdmissionService {
         String waitingKey = waitingQueueKey(type, id);
         String lockKey = "lock:admission:" + type + ":" + id;
 
-        // 분산 락 획득 (3초 타임아웃)
         if (Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(lockKey, "locked", Duration.ofSeconds(3)))) {
             try {
                 long maxSessions = sessionCalculator.calculateMaxActiveSessions();
@@ -57,11 +56,10 @@ public class AdmissionService {
                     return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장", requestId, null, null);
                 }
             } finally {
-                redisTemplate.delete(lockKey); // 락 해제
+                redisTemplate.delete(lockKey);
             }
         }
 
-        // 대기열 등록
         setOps.add(WAITING_MOVIES, id);
         zSetOps.add(waitingKey, member, Instant.now().toEpochMilli());
         Long myRank = zSetOps.rank(waitingKey, member);
@@ -74,11 +72,14 @@ public class AdmissionService {
     public List<String> admitNextUsers(String type, String id, long count) {
         String waitingKey = waitingQueueKey(type, id);
         String activeKey = activeSessionsKey(type, id);
+        
+        // ✅ [핵심 수정] 순서 보장을 위해 Set이 아닌 LinkedHashSet으로 받음
         Set<String> waitingUsers = zSetOps.range(waitingKey, 0, count - 1);
 
         if (waitingUsers == null || waitingUsers.isEmpty()) return Collections.emptyList();
 
         List<String> admittedUsers = new ArrayList<>();
+        // ✅ 조회된 순서 그대로 처리하여 FIFO 보장
         for (String member : waitingUsers) {
             if (zSetOps.remove(waitingKey, member) > 0) {
                 zSetOps.add(activeKey, member, System.currentTimeMillis());
