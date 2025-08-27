@@ -17,30 +17,35 @@ public class WebConfig implements WebMvcConfigurer {
                         // CloudFront 도메인
                         "https://cgv.peacemaker.kr",
                         "http://cgv.peacemaker.kr",
-                        // API 도메인 추가 (중요!)
+                        // API 도메인들 (dev 환경 추가!)
                         "https://api.peacemaker.kr",
                         "http://api.peacemaker.kr",
+                        "https://dev.api.peacemaker.kr",  // ⭐ 추가된 부분
+                        "http://dev.api.peacemaker.kr",   // ⭐ 추가된 부분
                         // 로컬 개발용
                         "http://localhost:3000",
                         "http://localhost:5173"
-                ) // ★ 이 라인 끝에 세미콜론(;)이 없어야 합니다.
+                )
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
-                .allowCredentials(true); // ★ 세미콜론은 전체 문장의 맨 마지막에 한 번만 와야 합니다.
+                .allowCredentials(true);
+                
         registry.addMapping("/system/**")
                 .allowedOrigins(
                         // CloudFront 도메인
                         "https://cgv.peacemaker.kr",
                         "http://cgv.peacemaker.kr",
-                        // API 도메인 추가 (중요!)
+                        // API 도메인들 (dev 환경 추가!)
                         "https://api.peacemaker.kr",
                         "http://api.peacemaker.kr",
+                        "https://dev.api.peacemaker.kr",  // ⭐ 추가된 부분
+                        "http://dev.api.peacemaker.kr",   // ⭐ 추가된 부분
                         // 로컬 개발용
                         "http://localhost:3000",
                         "http://localhost:5173"
-                ) // ★ 이 라인 끝에 세미콜론(;)이 없어야 합니다.
+                )
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
-                .allowCredentials(true); // ★ 세미콜론은 전체 문장의 맨 마지막에 한 번만 와야 합니다.
+                .allowCredentials(true);
     }
 }
