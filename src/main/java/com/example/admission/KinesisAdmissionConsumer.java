@@ -173,36 +173,30 @@ public class KinesisAdmissionConsumer {
     }
 
     private void processRecord(software.amazon.awssdk.services.kinesis.model.Record record) {
-    try {
-        String data = StandardCharsets.UTF_8.decode(record.data().asByteBuffer()).toString();
-        
-        logger.info("CONSUMER: 레코드 처리 시작 | 시퀀스번호: {} | 데이터: {}", 
-                   record.sequenceNumber(), data);
-        
-        JsonNode eventNode = objectMapper.readTree(data);
-        String eventType = eventNode.path("action").asText();
-        
-        // ✅ 기존: "ADMIT"만 처리
-        // ✅ 수정: "ADMIT"와 "enter" 모두 처리
-        if ("ADMIT".equals(eventType)) {
-            // 정상적인 입장 허가 이벤트 처리
-            String requestId = eventNode.path("requestId").asText();
-            String movieId = eventNode.path("movieId").asText();
-            String sessionId = eventNode.path("sessionId").asText();
+        try {
+            String data = StandardCharsets.UTF_8.decode(record.data().asByteBuffer()).toString();
+            JsonNode eventNode = objectMapper.readTree(data);
+            String eventType = eventNode.path("action").asText();
             
-            webSocketService.notifyAdmission(requestId, movieId);
-            logger.info("CONSUMER: 입장 허가 처리 완료 - requestId: {}", requestId);
-            
-        } 
-        else {
-            logger.warn("CONSUMER: 알 수 없는 이벤트 타입: {} | 데이터: {}", eventType, data);
+            // ⭐⭐⭐ [핵심 수정] Kinesis 이벤트를 받아서 WebSocket 알림을 보냄 ⭐⭐⭐
+            if ("ADMIT".equals(eventType)) {
+                String requestId = eventNode.path("requestId").asText();
+                String movieId = eventNode.path("movieId").asText();
+                
+                if (requestId != null && !requestId.isEmpty() && movieId != null && !movieId.isEmpty()) {
+                    logger.info("CONSUMER: 입장 허가 이벤트 수신. WebSocket 알림 전송... requestId: {}", requestId.substring(0, 8));
+                    webSocketService.notifyAdmission(requestId, movieId);
+                } else {
+                    logger.warn("CONSUMER: 필수 정보(requestId, movieId)가 누락된 ADMIT 이벤트 수신: {}", data);
+                }
+            } 
+            else {
+                logger.warn("CONSUMER: 알 수 없는 이벤트 타입: {}", eventType);
+            }
+        } catch (Exception e) {
+            logger.error("CONSUMER: 레코드 처리 실패 | 시퀀스번호: {}", record.sequenceNumber(), e);
         }
-        
-    } catch (Exception e) {
-        logger.error("CONSUMER: 레코드 처리 실패 | 시퀀스번호: {}", 
-                    record.sequenceNumber(), e);
     }
-}
 
     public boolean isRunning() {
         return isRunning;
