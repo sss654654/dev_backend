@@ -5,14 +5,14 @@ import com.example.admission.dto.EnterResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
+import io.lettuce.core.RedisCommandExecutionException;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.*;
 
 @Service
@@ -46,11 +46,82 @@ public class AdmissionService {
         return "waiting_queue:" + type + ":" + id; 
     }
 
-    // ✅ 핵심 수정: Redis Lua 스크립트를 사용한 원자적 입장 처리
+    // ✅ 핵심 수정: Redis WRONGTYPE 오류 방어 로직 추가
+    private void ensureKeyType(String key, String expectedType) {
+        try {
+            String actualType = redisTemplate.type(key).name();
+            if (!"NONE".equals(actualType) && !expectedType.equals(actualType)) {
+                logger.warn("🔧 [{}] 키 타입 불일치 감지 (예상: {}, 실제: {}). 키를 삭제하고 재생성합니다.", 
+                          key, expectedType, actualType);
+                redisTemplate.delete(key);
+            }
+        } catch (Exception e) {
+            logger.error("❌ [{}] 키 타입 확인 중 오류, 키 삭제 후 재생성", key, e);
+            redisTemplate.delete(key);
+        }
+    }
+
+    // ✅ 방어적 Redis 조회 메서드
+    public long getTotalActiveCount(String type, String id) {
+        String key = activeSessionsKey(type, id);
+        try {
+            ensureKeyType(key, "ZSET");
+            return Optional.ofNullable(zSetOps.zCard(key)).orElse(0L);
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 [{}] WRONGTYPE 오류 감지. 키 삭제 후 재시도", key);
+                redisTemplate.delete(key);
+                return 0L; // 삭제 후 초기값 반환
+            }
+            logger.error("❌ [{}] Redis 조회 실패", key, e);
+            return 0L;
+        }
+    }
+
+    public long getTotalWaitingCount(String type, String id) {
+        String key = waitingQueueKey(type, id);
+        try {
+            ensureKeyType(key, "ZSET");
+            return Optional.ofNullable(zSetOps.zCard(key)).orElse(0L);
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 [{}] WRONGTYPE 오류 감지. 키 삭제 후 재시도", key);
+                redisTemplate.delete(key);
+                return 0L;
+            }
+            logger.error("❌ [{}] Redis 조회 실패", key, e);
+            return 0L;
+        }
+    }
+
+    public long getVacantSlots(String type, String id) {
+        long maxSessions = sessionCalculator.calculateMaxActiveSessions();
+        long currentSessions = getTotalActiveCount(type, id);
+        return Math.max(0, maxSessions - currentSessions);
+    }
+
+    // ✅ WRONGTYPE 오류 판별 유틸리티
+    private boolean isWrongTypeError(Exception e) {
+        if (e instanceof RedisSystemException) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RedisCommandExecutionException) {
+                return ((RedisCommandExecutionException) cause).getMessage()
+                       .startsWith("WRONGTYPE");
+            }
+        }
+        return false;
+    }
+
+    // ✅ 핵심 수정: Redis Lua 스크립트를 사용한 원자적 입장 처리 (오류 방어 강화)
     public EnterResponse enter(String type, String id, String sessionId, String requestId) {
         String member = requestId + ":" + sessionId;
         String activeKey = activeSessionsKey(type, id);
         String waitingKey = waitingQueueKey(type, id);
+        
+        // 키 타입 사전 검증
+        ensureKeyType(activeKey, "ZSET");
+        ensureKeyType(waitingKey, "ZSET");
+        
         long now = System.currentTimeMillis();
         long maxSessions = sessionCalculator.calculateMaxActiveSessions();
 
@@ -62,10 +133,10 @@ public class AdmissionService {
             local member = ARGV[2]
             local now = tonumber(ARGV[3])
             
-            -- 현재 활성 세션 수 확인
-            local currentActive = redis.call('ZCARD', activeKey)
+            -- 키 존재 여부 확인 및 타입 검증 없이 바로 사용
+            local activeCount = redis.call('ZCARD', activeKey)
             
-            if currentActive < maxSessions then
+            if activeCount < maxSessions then
                 -- 즉시 활성 세션으로 추가
                 redis.call('ZADD', activeKey, now, member)
                 return {1, 'SUCCESS'}
@@ -78,112 +149,141 @@ public class AdmissionService {
             end
         """;
 
-        RedisScript<List> script = RedisScript.of(luaScript, List.class);
-        List<Object> result = redisTemplate.execute(script, 
-            Arrays.asList(activeKey, waitingKey), 
-            String.valueOf(maxSessions), member, String.valueOf(now));
+        try {
+            RedisScript<List> script = RedisScript.of(luaScript, List.class);
+            List<Object> result = redisTemplate.execute(script, 
+                Arrays.asList(activeKey, waitingKey), 
+                String.valueOf(maxSessions), member, String.valueOf(now));
 
-        // 영화를 활성 목록에 추가
-        setOps.add(ACTIVE_MOVIES, id);
-        if (Integer.parseInt(result.get(0).toString()) == 2) {
-            setOps.add(WAITING_MOVIES, id);
-        }
+            // 영화를 활성 목록에 추가
+            setOps.add(ACTIVE_MOVIES, id);
+            if (Integer.parseInt(result.get(0).toString()) == 2) {
+                setOps.add(WAITING_MOVIES, id);
+            }
 
-        // 결과 처리
-        if (Integer.parseInt(result.get(0).toString()) == 1) {
-            logger.info("✅ [{}] 즉시 입장 허가 - requestId: {}...", id, requestId.substring(0, 8));
-            return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장", requestId, null, null);
-        } else {
-            Long myRank = Long.parseLong(result.get(2).toString());
-            Long totalWaiting = Long.parseLong(result.get(3).toString());
-            logger.info("⏳ [{}] 대기열 등록 - requestId: {}... 순위: {}/{}", 
-                       id, requestId.substring(0, 8), myRank, totalWaiting);
-            return new EnterResponse(EnterResponse.Status.QUEUED, "대기열 등록", requestId, myRank, totalWaiting);
+            // 결과 처리
+            if (Integer.parseInt(result.get(0).toString()) == 1) {
+                logger.info("✅ [{}] 즉시 입장 허가 - requestId: {}...", id, requestId.substring(0, 8));
+                return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장", requestId, null, null);
+            } else {
+                Long myRank = Long.parseLong(result.get(2).toString());
+                Long totalWaiting = Long.parseLong(result.get(3).toString());
+                logger.info("⏳ [{}] 대기열 등록 완료 - rank: {}/{}, requestId: {}...", 
+                          id, myRank, totalWaiting, requestId.substring(0, 8));
+                return new EnterResponse(EnterResponse.Status.QUEUED, "대기열 등록", requestId, myRank, totalWaiting);
+            }
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.error("❌ [{}] Lua 스크립트 실행 중 WRONGTYPE 오류. 키 정리 후 재시도 필요", id);
+                // 문제 키들 정리
+                redisTemplate.delete(activeKey);
+                redisTemplate.delete(waitingKey);
+                throw new RuntimeException("Redis 키 타입 오류로 인한 입장 처리 실패. 잠시 후 다시 시도해주세요.", e);
+            }
+            throw e;
         }
     }
-    
-    // ✅ 수정: 배치 처리도 원자적으로 개선
+
+    // ✅ 추가: 대기자 승격 로직 (QueueProcessor에서 사용)
     public List<String> admitNextUsers(String type, String id, long count) {
-        String waitingKey = waitingQueueKey(type, id);
         String activeKey = activeSessionsKey(type, id);
-        long now = System.currentTimeMillis();
+        String waitingKey = waitingQueueKey(type, id);
         
-        // Lua 스크립트로 원자적 배치 처리
-        String luaScript = """
-            local waitingKey = KEYS[1]
-            local activeKey = KEYS[2]
-            local count = tonumber(ARGV[1])
-            local now = tonumber(ARGV[2])
+        try {
+            // 키 타입 사전 검증
+            ensureKeyType(activeKey, "ZSET");
+            ensureKeyType(waitingKey, "ZSET");
             
-            -- 대기열에서 다음 사용자들 가져오기
-            local waitingUsers = redis.call('ZRANGE', waitingKey, 0, count - 1)
-            local admitted = {}
-            
-            for i = 1, #waitingUsers do
-                local user = waitingUsers[i]
-                -- 대기열에서 제거
-                redis.call('ZREM', waitingKey, user)
-                -- 활성 세션에 추가
-                redis.call('ZADD', activeKey, now, user)
-                table.insert(admitted, user)
-            end
-            
-            return admitted
-        """;
+            // Lua 스크립트로 원자적 배치 처리
+            String luaScript = """
+                local waitingKey = KEYS[1]
+                local activeKey = KEYS[2]
+                local count = tonumber(ARGV[1])
+                local now = tonumber(ARGV[2])
+                
+                -- 대기열에서 다음 사용자들 가져오기
+                local waitingUsers = redis.call('ZRANGE', waitingKey, 0, count - 1)
+                local admitted = {}
+                
+                for i = 1, #waitingUsers do
+                    local user = waitingUsers[i]
+                    -- 대기열에서 제거
+                    redis.call('ZREM', waitingKey, user)
+                    -- 활성 세션에 추가
+                    redis.call('ZADD', activeKey, now, user)
+                    table.insert(admitted, user)
+                end
+                
+                return admitted
+            """;
 
-        RedisScript<List> script = RedisScript.of(luaScript, List.class);
-        List<String> admitted = redisTemplate.execute(script, 
-            Arrays.asList(waitingKey, activeKey), 
-            String.valueOf(count), String.valueOf(now));
+            long now = System.currentTimeMillis();
+            RedisScript<List> script = RedisScript.of(luaScript, List.class);
+            List<String> admitted = redisTemplate.execute(script, 
+                Arrays.asList(waitingKey, activeKey), 
+                String.valueOf(count), String.valueOf(now));
 
-        if (admitted != null && !admitted.isEmpty()) {
-            logger.info("🚀 [{}] {}명을 대기열에서 활성 세션으로 승격", id, admitted.size());
+            if (admitted != null && !admitted.isEmpty()) {
+                logger.info("🚀 [{}] {}명을 대기열에서 활성 세션으로 승격", id, admitted.size());
+                return admitted;
+            }
+
+            return Collections.emptyList();
+
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.error("❌ [{}] 사용자 승격 중 WRONGTYPE 오류. 키 정리", id);
+                redisTemplate.delete(activeKey);
+                redisTemplate.delete(waitingKey);
+            }
+            logger.error("❌ [{}] 사용자 승격 실패", id, e);
+            return Collections.emptyList();
         }
-
-        return admitted != null ? admitted : Collections.emptyList();
     }
 
+    // ✅ 누락된 메서드: 대기열 퇴장
     public void leave(String type, String id, String sessionId, String requestId) {
         String member = requestId + ":" + sessionId;
-        zSetOps.remove(activeSessionsKey(type, id), member);
-        zSetOps.remove(waitingQueueKey(type, id), member);
-        logger.info("👋 [{}] 사용자 퇴장 - requestId: {}...", id, requestId.substring(0, 8));
-    }
-    
-    public Map<String, Long> getAllUserRanks(String type, String id) {
-        String waitingKey = waitingQueueKey(type, id);
-        Set<String> members = zSetOps.range(waitingKey, 0, -1);
-        Map<String, Long> ranks = new LinkedHashMap<>();
-        if (members != null) {
-            long rank = 1;
-            for (String member : members) {
-                ranks.put(member.split(":")[0], rank++);
-            }
+        try {
+            zSetOps.remove(activeSessionsKey(type, id), member);
+            zSetOps.remove(waitingQueueKey(type, id), member);
+            logger.info("👋 [{}] 사용자 퇴장 - requestId: {}...", id, requestId.substring(0, 8));
+        } catch (Exception e) {
+            logger.warn("⚠️ [{}] 퇴장 처리 중 오류 (무시)", id, e);
         }
-        return ranks;
     }
 
+    // ✅ 누락된 메서드: 활성 세션 확인
     public boolean isUserInActiveSession(String type, String id, String sessionId, String requestId) {
-        return zSetOps.score(activeSessionsKey(type, id), requestId + ":" + sessionId) != null;
+        try {
+            String member = requestId + ":" + sessionId;
+            String key = activeSessionsKey(type, id);
+            ensureKeyType(key, "ZSET");
+            return zSetOps.score(key, member) != null;
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 활성 세션 확인 중 WRONGTYPE 오류. 키 삭제");
+                redisTemplate.delete(activeSessionsKey(type, id));
+            }
+            return false;
+        }
     }
 
+    // ✅ 누락된 메서드: 사용자 순위 조회
     public Long getUserRank(String type, String id, String sessionId, String requestId) {
-        Long rank = zSetOps.rank(waitingQueueKey(type, id), requestId + ":" + sessionId);
-        return (rank != null) ? rank + 1 : null;
-    }
-
-    public long getTotalActiveCount(String type, String id) {
-        return Optional.ofNullable(zSetOps.zCard(activeSessionsKey(type, id))).orElse(0L);
-    }
-
-    public long getTotalWaitingCount(String type, String id) {
-        return Optional.ofNullable(zSetOps.zCard(waitingQueueKey(type, id))).orElse(0L);
-    }
-
-    public long getVacantSlots(String type, String id) {
-        long maxSessions = sessionCalculator.calculateMaxActiveSessions();
-        long currentSessions = getTotalActiveCount(type, id);
-        return Math.max(0, maxSessions - currentSessions);
+        try {
+            String member = requestId + ":" + sessionId;
+            String waitingKey = waitingQueueKey(type, id);
+            ensureKeyType(waitingKey, "ZSET");
+            Long rank = zSetOps.rank(waitingKey, member);
+            return (rank != null) ? rank + 1 : null;
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 [{}] 순위 조회 중 WRONGTYPE 오류. 키 삭제", waitingQueueKey(type, id));
+                redisTemplate.delete(waitingQueueKey(type, id));
+            }
+            return null;
+        }
     }
     
     public Set<String> getActiveQueueMovieIds() {
@@ -196,14 +296,78 @@ public class AdmissionService {
     }
 
     public Set<String> findExpiredActiveSessions(String type, String id) {
-        long expirationThreshold = System.currentTimeMillis() - (sessionTimeoutSeconds * 1000);
-        return zSetOps.rangeByScore(activeSessionsKey(type, id), 0, expirationThreshold);
+        String key = activeSessionsKey(type, id);
+        try {
+            ensureKeyType(key, "ZSET");
+            long expirationThreshold = System.currentTimeMillis() - (sessionTimeoutSeconds * 1000);
+            return zSetOps.rangeByScore(key, 0, expirationThreshold);
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 [{}] 만료 세션 조회 중 WRONGTYPE 오류. 키 삭제", key);
+                redisTemplate.delete(key);
+            }
+            return Collections.emptySet();
+        }
     }
 
     public void removeActiveSessions(String type, String id, Set<String> expiredMembers) {
         if (expiredMembers != null && !expiredMembers.isEmpty()) {
-            zSetOps.remove(activeSessionsKey(type, id), expiredMembers.toArray(new String[0]));
-            logger.info("🧹 [{}] {}개 만료 세션 정리", id, expiredMembers.size());
+            String key = activeSessionsKey(type, id);
+            try {
+                zSetOps.remove(key, expiredMembers.toArray(new String[0]));
+                logger.info("🧹 [{}] {}개 만료 세션 정리", id, expiredMembers.size());
+            } catch (RedisSystemException e) {
+                if (isWrongTypeError(e)) {
+                    logger.warn("🔧 [{}] 세션 정리 중 WRONGTYPE 오류. 키 삭제", key);
+                    redisTemplate.delete(key);
+                }
+            }
+        }
+    }
+
+    // ✅ 추가: 현재 사용자 순위 조회 (대기열 상태 확인용)
+    public Long getMyRank(String type, String id, String sessionId, String requestId) {
+        String member = requestId + ":" + sessionId;
+        String waitingKey = waitingQueueKey(type, id);
+        
+        try {
+            ensureKeyType(waitingKey, "ZSET");
+            Long rank = zSetOps.rank(waitingKey, member);
+            return rank != null ? rank + 1 : null;
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 [{}] 순위 조회 중 WRONGTYPE 오류. 키 삭제", waitingKey);
+                redisTemplate.delete(waitingKey);
+            }
+            return null;
+        }
+    }
+
+    // ✅ 추가: 모든 사용자 순위 조회 (관리용)
+    public Map<String, Long> getAllUserRanks(String type, String id) {
+        String waitingKey = waitingQueueKey(type, id);
+        try {
+            ensureKeyType(waitingKey, "ZSET");
+            Set<String> members = zSetOps.range(waitingKey, 0, -1);
+            Map<String, Long> ranks = new LinkedHashMap<>();
+            if (members != null) {
+                long rank = 1;
+                for (String member : members) {
+                    try {
+                        String requestId = member.split(":")[0];
+                        ranks.put(requestId, rank++);
+                    } catch (Exception e) {
+                        logger.warn("멤버 파싱 실패: {}", member);
+                    }
+                }
+            }
+            return ranks;
+        } catch (RedisSystemException e) {
+            if (isWrongTypeError(e)) {
+                logger.warn("🔧 [{}] 전체 순위 조회 중 WRONGTYPE 오류. 키 삭제", waitingKey);
+                redisTemplate.delete(waitingKey);
+            }
+            return Collections.emptyMap();
         }
     }
 }

@@ -1,5 +1,4 @@
-// src/main/java/com/example/admission/service/LoadBalancingOptimizer.java - Pod 목록 관리 개선
-
+// src/main/java/com/example/admission/service/LoadBalancingOptimizer.java
 package com.example.admission.service;
 
 import org.slf4j.Logger;
@@ -129,65 +128,60 @@ public class LoadBalancingOptimizer {
         if (!activePods.contains(podId)) {
             logger.warn("⚠️ 활성 Pod 목록에 현재 Pod({})이 없습니다. 목록: {} | 강제 등록 후 처리합니다.", 
                        podId, activePods);
-            registerPod(); // 강제로 다시 등록
-            return true; // 등록 후 처리
+            registerPod(); // 강제 등록
+            return true;
         }
         
+        // movieId를 해시해서 Pod를 결정 (Round Robin 방식)
         int movieHash = Math.abs(movieId.hashCode());
         int assignedPodIndex = movieHash % activePods.size();
         String assignedPod = activePods.get(assignedPodIndex);
         
         boolean shouldProcess = podId.equals(assignedPod);
-        if (shouldProcess) {
-            logger.debug("🎯 Round Robin - 영화 {} 처리 담당: {} (인덱스: {}/{})", 
-                        movieId, podId, assignedPodIndex, activePods.size());
-        } else {
-            logger.debug("⏸️ Round Robin - 영화 {} 처리 담당 아님: 담당={}, 현재={}", 
-                        movieId, assignedPod, podId);
-        }
+        
+        logger.debug("🔄 Round Robin 분산: movieId={}, assignedPod={}, currentPod={}, shouldProcess={}", 
+                    movieId, assignedPod, podId, shouldProcess);
+        
         return shouldProcess;
     }
 
     private boolean shouldProcessHashBased(String movieId) {
         List<String> activePods = getActivePods();
-        if (activePods.isEmpty() || !activePods.contains(podId)) {
-            logger.warn("⚠️ Hash-Based: Pod 목록 문제, 기본 처리 적용");
+        
+        if (activePods.isEmpty()) {
             return true;
         }
         
-        int targetHash = Math.abs(movieId.hashCode());
-        String assignedPod = activePods.stream()
-            .min(Comparator.comparingInt(pod -> Math.abs(pod.hashCode() - targetHash)))
-            .orElse(podId);
+        // Consistent Hashing 방식
+        int movieHash = Math.abs(movieId.hashCode());
+        int targetIndex = movieHash % activePods.size();
+        String targetPod = activePods.get(targetIndex);
         
-        boolean shouldProcess = podId.equals(assignedPod);
-        if (shouldProcess) {
-            logger.debug("🎯 Hash-Based - 영화 {} 처리 담당: {}", movieId, podId);
-        }
-        return shouldProcess;
+        return podId.equals(targetPod);
     }
 
     private boolean shouldProcessLeastLoaded(String movieId) {
         try {
-            int myLoad = getCurrentPodLoad();
             List<String> activePods = getActivePods();
-            if (activePods.isEmpty() || !activePods.contains(podId)) {
-                logger.warn("⚠️ Least-Loaded: Pod 목록 문제, 기본 처리 적용");
+            
+            if (activePods.isEmpty()) {
                 return true;
             }
             
-            for (String otherPod : activePods) {
-                if (!otherPod.equals(podId)) {
-                    int otherLoad = getPodLoad(otherPod);
-                    if (otherLoad < myLoad) {
-                        logger.debug("⏸️ Least-Loaded - 다른 Pod의 부하가 더 낮음: 현재={}({}), 다른={}({})", 
-                                    podId, myLoad, otherPod, otherLoad);
-                        return false;
-                    }
+            // 모든 Pod의 부하를 확인하여 가장 적은 Pod가 처리
+            String leastLoadedPod = null;
+            int minLoad = Integer.MAX_VALUE;
+            
+            for (String pod : activePods) {
+                int load = getPodLoad(pod);
+                if (load < minLoad) {
+                    minLoad = load;
+                    leastLoadedPod = pod;
                 }
             }
-            logger.debug("🎯 Least-Loaded - 영화 {} 처리 (현재 부하: {})", movieId, myLoad);
-            return true;
+            
+            return podId.equals(leastLoadedPod);
+            
         } catch (Exception e) {
             logger.error("❌ 최소 부하 계산 중 오류", e);
             return shouldProcessRoundRobin(movieId);
