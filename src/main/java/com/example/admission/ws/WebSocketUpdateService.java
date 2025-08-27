@@ -1,5 +1,4 @@
-// src/main/java/com/example/admission/ws/WebSocketUpdateService.java - 메시지 전송 개선
-
+// src/main/java/com/example/admission/ws/WebSocketUpdateService.java
 package com.example.admission.ws;
 
 import org.slf4j.Logger;
@@ -26,64 +25,64 @@ public class WebSocketUpdateService {
     }
 
     /**
-     * 🎯 [핵심 수정] 입장 허가 알림을 특정 사용자에게 전송 (중복 전송 및 로깅 강화)
+     * ✅ 핵심 수정: 입장 허가 시 좌석 선택으로 이동하도록 강화된 알림
      */
     public void notifyAdmission(String requestId, String movieId) {
         try {
             String destination = "/topic/admission/" + requestId;
+            
+            // ✅ 중요: 좌석 페이지로 이동하기 위한 상세 정보 포함
             Map<String, Object> payload = Map.of(
                 "status", "ADMITTED",
+                "action", "REDIRECT_TO_SEATS",          // 액션 명시
                 "requestId", requestId,
                 "movieId", movieId,
-                "message", "입장이 허가되었습니다! 좌석 선택 페이지로 이동합니다.",
+                "message", "🎉 입장이 허가되었습니다! 좌석 선택 페이지로 이동합니다.",
+                "redirectUrl", "/seats",                // 이동할 URL
                 "timestamp", System.currentTimeMillis()
             );
             
-            // 🔧 메시지 전송 전 상세 로깅
-            logger.info("🎬 WEBSOCKET [BEFORE SEND]: 입장 허가 알림 전송 시도 | destination: {} | requestId: {}... | movieId: {}", 
-                    destination, requestId.substring(0, 8), movieId);
-            logger.debug("🎬 WEBSOCKET [PAYLOAD]: {}", payload);
+            logger.info("🎬 WEBSOCKET [입장 허가]: destination: {} | requestId: {}... | movieId: {}", 
+                       destination, requestId.substring(0, 8), movieId);
             
-            // 실제 메시지 전송
+            // 메시지 전송
             template.convertAndSend(destination, payload);
             admissionNotificationCount.incrementAndGet();
             
-            // 🔧 메시지 전송 후 상세 로깅
-            logger.info("🎬 WEBSOCKET [AFTER SEND]: 입장 허가 알림 전송 완료 | destination: {} | requestId: {}... | movieId: {} | 총 {}번째", 
-                    destination, requestId.substring(0, 8), movieId, admissionNotificationCount.get());
-                    
-            // 🔧 추가: 메시지 전송 성공 확인을 위한 추가 로그
-            logger.info("🎬 WEBSOCKET [SUCCESS]: Template.convertAndSend() 성공적으로 호출됨");
+            logger.info("✅ WEBSOCKET [전송 완료]: 입장 허가 알림 전송 성공 (총 {}번째)", 
+                       admissionNotificationCount.get());
                     
         } catch (Exception e) {
             logger.error("❌ WEBSOCKET [ERROR]: 입장 허가 알림 전송 실패 - requestId: {}..., movieId: {}", 
-                    requestId.substring(0, 8), movieId, e);
+                        requestId.substring(0, 8), movieId, e);
         }
     }
 
     /**
-     * 🔄 순위 업데이트를 특정 사용자에게 전송
+     * ✅ 수정: 순위 업데이트 로직 강화
      */
     public void notifyRankUpdate(String requestId, String status, long rank, long totalWaiting) {
         try {
             String destination = "/topic/rank/" + requestId;
+            
             Map<String, Object> payload = Map.of(
                 "status", status,
                 "rank", rank,
                 "totalWaiting", totalWaiting,
                 "timestamp", System.currentTimeMillis(),
-                "requestId", requestId
+                "requestId", requestId,
+                "message", String.format("현재 %d번째 순서입니다. (전체 %d명 대기)", rank, totalWaiting)
             );
             
             template.convertAndSend(destination, payload);
             rankUpdateCount.incrementAndGet();
             
-            logger.debug("📊 WEBSOCKET: 순위 업데이트 전송 완료 | destination: {} | requestId: {}... | rank: {}/{}", 
-                        destination, requestId.substring(0, 8), rank, totalWaiting);
+            logger.debug("📊 WEBSOCKET [순위 업데이트]: requestId: {}... | rank: {}/{}", 
+                        requestId.substring(0, 8), rank, totalWaiting);
                         
         } catch (Exception e) {
             logger.error("❌ 순위 업데이트 전송 실패 - requestId: {}..., rank: {}", 
-                    requestId.substring(0, 8), rank, e);
+                        requestId.substring(0, 8), rank, e);
         }
     }
 
@@ -102,8 +101,8 @@ public class WebSocketUpdateService {
             template.convertAndSend(destination, payload);
             statsUpdateCount.incrementAndGet();
             
-            logger.debug("📈 WEBSOCKET: 대기열 통계 브로드캐스트 | destination: {} | totalWaiting: {} | movieId: {}", 
-                        destination, totalWaiting, movieId);
+            logger.debug("📈 WEBSOCKET [통계 브로드캐스트]: movieId: {} | totalWaiting: {}", 
+                        movieId, totalWaiting);
                         
         } catch (Exception e) {
             logger.error("❌ 대기열 통계 브로드캐스트 실패 - movieId: {}, totalWaiting: {}", 
@@ -112,13 +111,14 @@ public class WebSocketUpdateService {
     }
 
     /**
-     * ⏰ 세션 타임아웃으로 퇴장된 사용자에게 알림을 보냅니다.
+     * ⏰ 세션 타임아웃으로 퇴장된 사용자에게 알림
      */
     public void notifyTimeout(String requestId) {
         try {
             String destination = "/topic/timeout/" + requestId;
             Map<String, Object> payload = Map.of(
                 "status", "TIMEOUT",
+                "action", "REDIRECT_TO_MOVIES",
                 "message", "세션 유효 시간이 만료되어 자동으로 퇴장 처리되었습니다.",
                 "timestamp", System.currentTimeMillis(),
                 "requestId", requestId
@@ -127,8 +127,7 @@ public class WebSocketUpdateService {
             template.convertAndSend(destination, payload);
             timeoutNotificationCount.incrementAndGet();
             
-            logger.warn("⏰ WEBSOCKET: 타임아웃 알림 전송 | destination: {} | requestId: {}...", 
-                       destination, requestId.substring(0, 8));
+            logger.warn("⏰ WEBSOCKET [타임아웃]: requestId: {}...", requestId.substring(0, 8));
                        
         } catch (Exception e) {
             logger.error("❌ 타임아웃 알림 전송 실패 - requestId: {}...", requestId.substring(0, 8), e);
@@ -136,7 +135,7 @@ public class WebSocketUpdateService {
     }
 
     /**
-     * 📋 대기열 진입 확인 메시지 (사용자가 대기열에 등록되었을 때)
+     * ✅ 새로 추가: 대기열 진입 확인 메시지
      */
     public void notifyQueueJoined(String requestId, long position, long totalWaiting) {
         try {
@@ -152,8 +151,8 @@ public class WebSocketUpdateService {
             
             template.convertAndSend(destination, payload);
             
-            logger.info("📋 WEBSOCKET: 대기열 진입 확인 전송 | destination: {} | requestId: {}... | position: {}/{}", 
-                       destination, requestId.substring(0, 8), position, totalWaiting);
+            logger.info("📋 WEBSOCKET [대기열 진입]: requestId: {}... | position: {}/{}", 
+                       requestId.substring(0, 8), position, totalWaiting);
                        
         } catch (Exception e) {
             logger.error("❌ 대기열 진입 확인 전송 실패 - requestId: {}...", requestId.substring(0, 8), e);
@@ -170,27 +169,30 @@ public class WebSocketUpdateService {
             "statsUpdates", statsUpdateCount.get(),
             "timeoutNotifications", timeoutNotificationCount.get(),
             "totalMessages", admissionNotificationCount.get() + rankUpdateCount.get() + 
-                           statsUpdateCount.get() + timeoutNotificationCount.get()
+                           statsUpdateCount.get() + timeoutNotificationCount.get(),
+            "lastUpdated", System.currentTimeMillis()
         );
     }
 
     /**
-     * 🔧 [디버깅용] 테스트 메시지 전송
+     * ✅ 새로 추가: 강제 새로고침 알림 (디버깅용)
      */
-    public void sendTestMessage(String requestId, String testMessage) {
+    public void notifyForceRefresh(String requestId, String reason) {
         try {
-            String destination = "/topic/test/" + requestId;
+            String destination = "/topic/refresh/" + requestId;
             Map<String, Object> payload = Map.of(
-                "status", "TEST",
-                "message", testMessage,
+                "status", "FORCE_REFRESH",
+                "action", "RELOAD_PAGE",
+                "reason", reason,
                 "timestamp", System.currentTimeMillis()
             );
             
             template.convertAndSend(destination, payload);
-            logger.info("🧪 TEST MESSAGE 전송 완료 | destination: {} | message: {}", destination, testMessage);
-            
+            logger.info("🔄 WEBSOCKET [강제 새로고침]: requestId: {}... | reason: {}", 
+                       requestId.substring(0, 8), reason);
+                       
         } catch (Exception e) {
-            logger.error("❌ 테스트 메시지 전송 실패", e);
+            logger.error("❌ 강제 새로고침 알림 실패", e);
         }
     }
 }
