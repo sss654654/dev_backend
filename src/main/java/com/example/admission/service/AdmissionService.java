@@ -43,36 +43,60 @@ public class AdmissionService {
     /**
      * 대기열 진입 로직
      */
+/**
+ * 대기열 진입 로직 (동시성 문제 해결)
+ */
     public EnterResponse enter(String type, String id, String sessionId, String requestId) {
         long maxSessions = sessionCalculator.calculateMaxActiveSessions();
-        long currentSessions = getTotalActiveCount(type, id);
+        String member = requestId + ":" + sessionId;
+        String activeKey = activeSessionsKey(type, id);
+        String waitingKey = waitingQueueKey(type, id);
+        String lockKey = "admission_lock:" + type + ":" + id;
         
-        logger.info("[{}] 입장 요청 - 현재 활성세션: {}/{}, 요청자: {}:{}", 
-                   id, currentSessions, maxSessions, requestId, sessionId);
+        logger.info("[{}] 입장 요청 - 최대세션: {}, 요청자: {}:{}", 
+                id, maxSessions, requestId, sessionId);
 
-        if (currentSessions < maxSessions) {
-            // 즉시 입장 - 활성 세션으로 등록
-            // ✅ [수정] TTL 방식 대신 Sorted Set에 입장 시간 기록
-            zSetOps.add(activeSessionsKey(type, id), requestId + ":" + sessionId, System.currentTimeMillis());
-
-            logger.info("[{}] 즉시 입장 허가 - 현재 활성세션: {}/{}", getTotalActiveCount(type, id), maxSessions);
-            return new EnterResponse(EnterResponse.Status.SUCCESS, "즉시 입장 허가되었습니다.", requestId, null, null);
-        } else {
-            // 대기열 등록
-            setOps.add(WAITING_MOVIES, id);
-            String waitingKey = waitingQueueKey(type, id);
-            String member = requestId + ":" + sessionId;
-
-            zSetOps.add(waitingKey, member, Instant.now().toEpochMilli());
-
-            Long myRank = zSetOps.rank(waitingKey, member);
-            myRank = (myRank == null) ? 0L : myRank;
-            Long totalWaiting = zSetOps.zCard(waitingKey);
-
-            logger.info("[{}] 대기열 등록 - 순위 {}/{}, 요청자: {}:{}", 
-                        id, myRank + 1, totalWaiting, requestId, sessionId);
-            return new EnterResponse(EnterResponse.Status.QUEUED, "대기열에 등록되었습니다.", requestId, myRank + 1, totalWaiting);
+        // ✅ 분산 락을 사용한 원자적 처리
+        Boolean lockAcquired = redisTemplate.opsForValue()
+            .setIfAbsent(lockKey, "locked", Duration.ofSeconds(3));
+            
+        if (lockAcquired) {
+            try {
+                // 락을 획득한 상태에서 다시 세션 수 확인
+                long currentSessions = getTotalActiveCount(type, id);
+                
+                logger.info("[{}] 락 획득 - 현재 활성세션: {}/{}, 요청자: {}:{}", 
+                        id, currentSessions, maxSessions, requestId, sessionId);
+                
+                if (currentSessions < maxSessions) {
+                    // 즉시 입장 - 활성 세션으로 등록
+                    zSetOps.add(activeKey, member, System.currentTimeMillis());
+                    
+                    logger.info("[{}] 즉시 입장 허가 - 현재 활성세션: {}/{}", 
+                            id, getTotalActiveCount(type, id), maxSessions);
+                            
+                    return new EnterResponse(EnterResponse.Status.SUCCESS, 
+                                        "즉시 입장 허가되었습니다.", requestId, null, null);
+                }
+            } finally {
+                // 락 해제
+                redisTemplate.delete(lockKey);
+            }
         }
+        
+        // 락을 획득하지 못했거나 세션이 가득 찬 경우 대기열에 등록
+        setOps.add(WAITING_MOVIES, id);
+        zSetOps.add(waitingKey, member, Instant.now().toEpochMilli());
+
+        Long myRank = zSetOps.rank(waitingKey, member);
+        myRank = (myRank == null) ? 0L : myRank;
+        Long totalWaiting = zSetOps.zCard(waitingKey);
+
+        logger.info("[{}] 대기열 등록 - 순위 {}/{}, 요청자: {}:{}", 
+                    id, myRank + 1, totalWaiting, requestId, sessionId);
+                    
+        return new EnterResponse(EnterResponse.Status.QUEUED, 
+                            "대기열에 등록되었습니다.", requestId, myRank + 1, totalWaiting);
     }
 
     /**
