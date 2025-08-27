@@ -2,8 +2,6 @@
 package com.example.admission.controller;
 
 import com.example.admission.service.AdmissionService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,7 +11,6 @@ import java.util.Map;
 @RequestMapping("/api/status")
 public class StatusController {
 
-    private static final Logger logger = LoggerFactory.getLogger(StatusController.class);
     private final AdmissionService admissionService;
 
     public StatusController(AdmissionService admissionService) {
@@ -26,17 +23,17 @@ public class StatusController {
             @RequestParam String sessionId,
             @RequestParam String movieId) {
         
-        String member = requestId + ":" + sessionId;
-        
-        if (admissionService.isInActiveSession("movie", movieId, member)) {
+        // isUserInActiveSession 메서드 시그니처에 맞게 호출
+        if (admissionService.isUserInActiveSession("movie", movieId, sessionId, requestId)) {
             return ResponseEntity.ok(Map.of("status", "ACTIVE", "action", "REDIRECT_TO_SEATS"));
         }
         
-        Long rank = admissionService.getUserRank("movie", movieId, member);
+        // getUserRank 메서드 시그니처에 맞게 호출
+        Long rank = admissionService.getUserRank("movie", movieId, sessionId, requestId);
         
         if (rank != null) {
             long totalWaiting = admissionService.getTotalWaitingCount("movie", movieId);
-            return ResponseEntity.ok(Map.of("status", "WAITING", "rank", rank, "totalWaiting", totalWaiting, "action", "STAY_IN_QUEUE"));
+            return ResponseEntity.ok(Map.of("status", "WAITING", "rank", rank, "totalWaiting", totalWaiting));
         }
         
         return ResponseEntity.ok(Map.of("status", "NOT_FOUND", "action", "REDIRECT_TO_MOVIES"));
