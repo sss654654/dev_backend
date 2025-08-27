@@ -2,15 +2,14 @@
 package com.example.admission;
 
 import com.example.admission.service.AdmissionService;
-import com.example.admission.service.DynamicSessionCalculator;
 import com.example.admission.service.LoadBalancingOptimizer;
+import com.example.admission.ws.WebSocketUpdateService; // WebSocketUpdateService 다시 임포트
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Component
@@ -18,19 +17,18 @@ public class QueueProcessor {
     private static final Logger logger = LoggerFactory.getLogger(QueueProcessor.class);
     
     private final AdmissionService admissionService;
-    private final DynamicSessionCalculator sessionCalculator;
     private final LoadBalancingOptimizer loadBalancingOptimizer;
-    private final KinesisAdmissionProducer kinesisAdmissionProducer; // WebSocketUpdateService 대신 Kinesis Producer 주입
+    private final KinesisAdmissionProducer kinesisProducer;
+    private final WebSocketUpdateService webSocketUpdateService; // WebSocket 서비스 다시 주입
 
-    @Autowired
     public QueueProcessor(AdmissionService admissionService, 
-                         DynamicSessionCalculator sessionCalculator,
-                         LoadBalancingOptimizer loadBalancingOptimizer,
-                         KinesisAdmissionProducer kinesisAdmissionProducer) { // 생성자 수정
+                          LoadBalancingOptimizer loadBalancingOptimizer,
+                          KinesisAdmissionProducer kinesisProducer,
+                          WebSocketUpdateService webSocketUpdateService) { // 생성자 수정
         this.admissionService = admissionService;
-        this.sessionCalculator = sessionCalculator;
         this.loadBalancingOptimizer = loadBalancingOptimizer;
-        this.kinesisAdmissionProducer = kinesisAdmissionProducer; // 주입
+        this.kinesisProducer = kinesisProducer;
+        this.webSocketUpdateService = webSocketUpdateService; // 주입
     }
 
     @Scheduled(fixedRateString = "${queueProcessorInterval:1000}")
@@ -39,18 +37,9 @@ public class QueueProcessor {
             Set<String> movieIds = admissionService.getActiveQueueMovieIds();
             if (movieIds.isEmpty()) return;
             
-            logger.debug("🔄 대기열 처리 시작 - 활성 영화 {}개", movieIds.size());
-            
             for (String movieId : movieIds) {
-                try {
-                    if (!loadBalancingOptimizer.shouldProcessMovie(movieId)) {
-                        logger.debug("🔀 [{}] 부하 분산으로 인해 다른 Pod에서 처리", movieId);
-                        continue;
-                    }
-                    
+                if (loadBalancingOptimizer.shouldProcessMovie(movieId)) {
                     processMovieQueue("movie", movieId);
-                } catch (Exception e) {
-                    logger.error("❌ [{}] 대기열 처리 실패", movieId, e);
                 }
             }
         } catch (Exception e) {
@@ -68,66 +57,40 @@ public class QueueProcessor {
                 List<String> admittedUsers = admissionService.admitNextUsers(type, movieId, admitCount);
                 
                 if (!admittedUsers.isEmpty()) {
-                    logger.info("🚀 [{}] {}명을 대기열에서 활성 세션으로 승격", movieId, admittedUsers.size());
-                    
-                    // ⭐⭐⭐ [핵심 수정] WebSocket 직접 호출 대신 Kinesis로 이벤트 발행 ⭐⭐⭐
-                    kinesisAdmissionProducer.publishAdmitEvents(admittedUsers, movieId);
+                    logger.info("🚀 [{}] {}명을 Kinesis로 입장 이벤트 전송", movieId, admittedUsers.size());
+                    kinesisProducer.publishAdmitEvents(admittedUsers, movieId);
                 }
             }
+            
+            // ⭐ [핵심 기능 추가] 남은 대기자들에게 순위 업데이트 방송
+            updateAndBroadcastRank(type, movieId);
 
         } catch (Exception e) {
             logger.error("❌ [{}] 영화 대기열 처리 중 오류", movieId, e);
         }
     }
-    
-    // isRedisTypeError, logSystemStatus 메서드는 기존과 동일하게 유지
-    private boolean isRedisTypeError(Exception e) {
-        if (e.getMessage() != null && e.getMessage().contains("WRONGTYPE")) return true;
-        Throwable cause = e.getCause();
-        while (cause != null) {
-            if (cause.getMessage() != null && cause.getMessage().contains("WRONGTYPE")) return true;
-            cause = cause.getCause();
+
+    /**
+     * 남은 대기자들의 순위를 조회하고 WebSocket으로 업데이트 알림을 보냅니다.
+     */
+    private void updateAndBroadcastRank(String type, String movieId) {
+        long currentTotalWaiting = admissionService.getTotalWaitingCount(type, movieId);
+        if (currentTotalWaiting == 0) {
+            return; // 대기자가 없으면 알림 불필요
         }
-        return false;
-    }
-    
-    // ✅ 추가: 시스템 상태 모니터링 (선택사항)
-    @Scheduled(fixedDelayString = "${systemStatusLogInterval:300000}") // 5분마다
-    public void logSystemStatus() {
-        try {
-            Set<String> allMovies = admissionService.getActiveQueueMovieIds();
-            if (allMovies.isEmpty()) {
-                logger.info("📊 시스템 상태: 활성 대기열 없음");
-                return;
-            }
 
-            long totalActive = 0;
-            long totalWaiting = 0;
-            int movieCount = 0;
+        // 1. 해당 영화 대기열의 모든 사용자에게 현재 총 대기자 수를 브로드캐스트
+        webSocketUpdateService.broadcastQueueStats(movieId, currentTotalWaiting);
 
-            for (String movieId : allMovies) {
-                try {
-                    long active = admissionService.getTotalActiveCount("movie", movieId);
-                    long waiting = admissionService.getTotalWaitingCount("movie", movieId);
-                    
-                    totalActive += active;
-                    totalWaiting += waiting;
-                    movieCount++;
-                    
-                    if (active > 0 || waiting > 0) {
-                        logger.info("📊 [{}] 활성: {}, 대기: {}", movieId, active, waiting);
-                    }
-                } catch (Exception e) {
-                    logger.warn("⚠️ [{}] 상태 조회 실패", movieId, e);
-                }
-            }
-
-            long maxSessions = sessionCalculator.calculateMaxActiveSessions();
-            logger.info("📊 전체 시스템 상태 - 영화: {}개, 총 활성: {}/{}, 총 대기: {}", 
-                       movieCount, totalActive, maxSessions, totalWaiting);
-
-        } catch (Exception e) {
-            logger.error("❌ 시스템 상태 로깅 실패", e);
+        // 2. 부하를 고려하여 대기열의 상위 100명에게만 개별 순위 알림
+        Map<String, Long> topRanks = admissionService.getAllUserRanks(type, movieId); // 전체 순위 가져오기
+        
+        logger.debug("[{}] 총 {}명에게 순위 업데이트 알림 전송", movieId, topRanks.size());
+        
+        for (Map.Entry<String, Long> entry : topRanks.entrySet()) {
+            String requestId = entry.getKey();
+            Long rank = entry.getValue();
+            webSocketUpdateService.notifyRankUpdate(requestId, "WAITING", rank, currentTotalWaiting);
         }
     }
 }
