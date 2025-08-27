@@ -173,42 +173,43 @@ public class KinesisAdmissionConsumer {
     }
 
     private void processRecord(software.amazon.awssdk.services.kinesis.model.Record record) {
-        try {
-            String data = StandardCharsets.UTF_8.decode(record.data().asByteBuffer()).toString();
+    try {
+        String data = StandardCharsets.UTF_8.decode(record.data().asByteBuffer()).toString();
+        
+        logger.info("CONSUMER: 레코드 처리 시작 | 시퀀스번호: {} | 데이터: {}", 
+                   record.sequenceNumber(), data);
+        
+        JsonNode eventNode = objectMapper.readTree(data);
+        String eventType = eventNode.path("action").asText();
+        
+        // ✅ 기존: "ADMIT"만 처리
+        // ✅ 수정: "ADMIT"와 "enter" 모두 처리
+        if ("ADMIT".equals(eventType)) {
+            // 정상적인 입장 허가 이벤트 처리
+            String requestId = eventNode.path("requestId").asText();
+            String movieId = eventNode.path("movieId").asText();
+            String sessionId = eventNode.path("sessionId").asText();
             
-            logger.info("CONSUMER: 레코드 처리 시작 | 시퀀스번호: {} | 데이터: {}", 
-                       record.sequenceNumber(), data);
+            webSocketService.notifyAdmission(requestId, movieId);
+            logger.info("CONSUMER: 입장 허가 처리 완료 - requestId: {}", requestId);
             
-            JsonNode eventNode = objectMapper.readTree(data);
-            String eventType = eventNode.path("action").asText();
+        } else if ("enter".equals(eventType)) {
+            // 테스트 데이터나 다른 시스템에서 오는 enter 이벤트
+            String user = eventNode.path("user").asText();
+            String session = eventNode.path("session").asText();
             
-            if ("ADMIT".equals(eventType)) {
-                String requestId = eventNode.path("requestId").asText();
-                String movieId = eventNode.path("movieId").asText();
-                String sessionId = eventNode.path("sessionId").asText();
-                long timestamp = eventNode.path("timestamp").asLong();
-                
-                logger.info("CONSUMER: 입장 허가 이벤트 처리 시작 | requestId: {}... | movieId: {} | sessionId: {}...", 
-                           requestId.substring(0, Math.min(8, requestId.length())), 
-                           movieId, 
-                           sessionId.substring(0, Math.min(8, sessionId.length())));
-                
-                // WebSocket을 통해 해당 사용자에게 입장 허가 알림 (백업용)
-                webSocketService.notifyAdmission(requestId, movieId);
-                
-                processedCount.incrementAndGet();
-                logger.info("CONSUMER: 입장 허가 WebSocket 알림 전송 완료 | requestId: {}... | 총 처리: {}건", 
-                           requestId.substring(0, Math.min(8, requestId.length())), processedCount.get());
-                
-            } else {
-                logger.warn("CONSUMER: 알 수 없는 이벤트 타입: {} | 데이터: {}", eventType, data);
-            }
+            logger.info("CONSUMER: Enter 이벤트 수신 - user: {}, session: {}", user, session);
+            // 필요시 추가 처리 로직
             
-        } catch (Exception e) {
-            logger.error("CONSUMER: 입장 이벤트 처리 실패 | 시퀀스번호: {} | 에러: {}", 
-                        record.sequenceNumber(), e.getMessage(), e);
+        } else {
+            logger.warn("CONSUMER: 알 수 없는 이벤트 타입: {} | 데이터: {}", eventType, data);
         }
+        
+    } catch (Exception e) {
+        logger.error("CONSUMER: 레코드 처리 실패 | 시퀀스번호: {}", 
+                    record.sequenceNumber(), e);
     }
+}
 
     public boolean isRunning() {
         return isRunning;
