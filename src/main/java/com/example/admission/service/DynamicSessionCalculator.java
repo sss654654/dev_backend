@@ -13,16 +13,16 @@ public class DynamicSessionCalculator {
 
     private final PodDiscoveryService podDiscoveryService;
 
-    @Value("${admission.dynamic-scaling.enabled:true}")
+    @Value("${ENABLE_DYNAMIC_SCALING:true}")
     private boolean dynamicScalingEnabled;
 
-    @Value("${admission.base-sessions-per-pod:2}")
+    @Value("${BASE_SESSIONS_PER_POD:2}")
     private int baseSessionsPerPod;
 
-    @Value("${admission.max-total-sessions-limit:1000}")
+    @Value("${MAX_TOTAL_SESSIONS:1000}")
     private int maxTotalSessionsLimit;
 
-    @Value("${admission.fallback-pod-count:1}")
+    @Value("${FALLBACK_POD_COUNT:1}")
     private int fallbackPodCount;
 
     public DynamicSessionCalculator(PodDiscoveryService podDiscoveryService) {

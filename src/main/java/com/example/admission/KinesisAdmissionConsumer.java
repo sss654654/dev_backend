@@ -28,13 +28,13 @@ public class KinesisAdmissionConsumer {
     private static final Logger logger = LoggerFactory.getLogger(KinesisAdmissionConsumer.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     
-    @Value("${admission.kinesis.stream-name:prod-cgv-admissions-stream}")
+    @Value("${KINESIS_STREAM_NAME:prod-cgv-admissions-stream}")
     private String streamName;
     
     @Value("${admission.kinesis.region:ap-northeast-2}")
     private String region;
     
-    @Value("${admission.kinesis.consumer.poll-interval:1000}") // 1초로 단축
+    @Value("${KINESIS_POLL_INTERVAL:1000}") // 1초로 단축
     private long pollInterval;
     
     @Value("${admission.kinesis.consumer.enabled:true}")
@@ -193,15 +193,8 @@ public class KinesisAdmissionConsumer {
             webSocketService.notifyAdmission(requestId, movieId);
             logger.info("CONSUMER: 입장 허가 처리 완료 - requestId: {}", requestId);
             
-        } else if ("enter".equals(eventType)) {
-            // 테스트 데이터나 다른 시스템에서 오는 enter 이벤트
-            String user = eventNode.path("user").asText();
-            String session = eventNode.path("session").asText();
-            
-            logger.info("CONSUMER: Enter 이벤트 수신 - user: {}, session: {}", user, session);
-            // 필요시 추가 처리 로직
-            
-        } else {
+        } 
+        else {
             logger.warn("CONSUMER: 알 수 없는 이벤트 타입: {} | 데이터: {}", eventType, data);
         }
         

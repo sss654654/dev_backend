@@ -29,7 +29,7 @@ public class AdmissionService {
     private final ZSetOperations<String, String> zSetOps;
     private final DynamicSessionCalculator sessionCalculator;
 
-    @Value("${admission.session.timeout:30}") // 기본 타임아웃 30초로 조정
+    @Value("${SESSION_TIMEOUT_SECONDS:30}") // 기본 타임아웃 30초로 조정
     private long sessionTimeoutSeconds;
 
     public AdmissionService(RedisTemplate<String, String> redisTemplate,
