@@ -45,19 +45,20 @@ public class SessionController {
     public ResponseEntity<Void> issueSessionPost(HttpServletRequest request) {
         return issueSessionInternal(request);
     }
-
-    // ✅ 공통 로직 분리 (GET/POST 모두 동일한 처리)
     private ResponseEntity<Void> issueSessionInternal(HttpServletRequest request) {
         try {
             String sessionId = UUID.randomUUID().toString();
             sessionService.createSession(sessionId);
 
-            boolean isSecure = request.isSecure(); // HTTPS 여부
+            // X-Forwarded-Proto 헤더를 확인하여 실제 프로토콜을 파악
+            String protocol = request.getHeader("X-Forwarded-Proto");
+            boolean isSecure = protocol != null && protocol.equalsIgnoreCase("https");
+
             String sameSite = isSecure ? "None" : "Lax";
 
             ResponseCookie cookie = ResponseCookie.from(SessionService.COOKIE_NAME, sessionId)
                     .httpOnly(true)
-                    .secure(isSecure)
+                    .secure(isSecure) // 이 값이 true로 설정되어야 함
                     .path("/")
                     .maxAge(Duration.ofHours(1))
                     .sameSite(sameSite)
