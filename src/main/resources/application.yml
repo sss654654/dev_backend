@@ -119,6 +119,15 @@ server:
   port: 8080
   servlet:
     context-path: /
+  tomcat:
+      # WebSocket 연결 타임아웃 증가
+      connection-timeout: 120000  # 2분
+      # 최대 연결 수 증가 (8000명 대응)
+      max-connections: 12000
+      # 최대 스레드 수 증가
+      max-threads: 400
+      # accept 카운트 증가
+      accept-count: 200
 
 # 로깅 설정
 logging:
@@ -157,7 +166,13 @@ spring:
   config:
     activate:
       on-profile: prod
-
+  websocket:
+    # 메시지 크기 제한 증가
+    message-size-limit: 131072  # 128KB (기본값의 2배)
+    # 송신 버퍼 크기 증가
+    send-buffer-size-limit: 1048576  # 1MB (기본값의 2배)
+    # 전송 시간 제한 증가
+    send-time-limit: 30000  # 30초
   # ========== 운영용 데이터소스 설정 (커넥션 풀 확장) ==========
   datasource:
     write:
@@ -182,9 +197,10 @@ spring:
         enabled: true
       lettuce:
         pool:
-          max-active: 20
-          max-idle: 10
-          min-idle: 5
+          max-active: 50   # 최대 활성 연결
+          max-idle: 20     # 최대 유휴 연결
+          min-idle: 5      # 최소 유휴 연결
+          max-wait: 5000   # 최대 대기 시간 (5초)
 
   # ========== 운영용 JPA 설정 (스키마 검증) ==========
   jpa:
@@ -213,6 +229,9 @@ logging:
   level:
     com.example: INFO # 운영에서는 INFO 레벨 이상만 기록
     software.amazon.awssdk: INFO
+    org.springframework.web.socket: WARN  # WebSocket 로그 감소
+    org.springframework.messaging: WARN   # 메시징 로그 감소
+    com.example.admission: INFO          # 애플리케이션 로그는 유지
     software.amazon.awssdk.request: DEBUG # 단, AWS API 요청은 디버깅을 위해 DEBUG 유지
     io.awspring.cloud: INFO
 

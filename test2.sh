@@ -1,91 +1,98 @@
 #!/bin/bash
-# 대기열 테스트용 - 1500명으로 늘려서 확실히 대기열 상황 만들기
+# =================================================
+# 방법 1: 개선된 test2.sh (병렬 처리 최적화)
+# =================================================
 
-if [ $# -eq 0 ]; then
-    echo "Usage: $0 <loop_count>"
-    echo "Example: $0 1500"
-    exit 1
-fi
+#!/bin/bash
+# 개선된 CGV 대기열 부하 테스트 - 100K 트래픽용
 
-LOOP_COUNT=$1
+TOTAL_REQUESTS=10000
+CONCURRENT_BATCH=1000    # 동시 실행할 배치 수
+BATCH_SIZE=100          # 각 배치당 요청 수
 
-if ! [[ "$LOOP_COUNT" =~ ^[0-9]+$ ]]; then
-    echo "Error: Please provide a valid number"
-    exit 1
-fi
+echo "🚀 CGV 대기열 10만 트래픽 테스트 시작"
+echo "총 요청: ${TOTAL_REQUESTS}, 동시 배치: ${CONCURRENT_BATCH}, 배치 크기: ${BATCH_SIZE}"
 
-echo "🚀 대기열 테스트 시작 - 총 ${LOOP_COUNT}명"
-echo "현재 최대 세션: 1000명 (2 Pod × 500세션)"
-echo "========================================="
-
-# UUID 생성 함수
+# UUID 생성 함수 최적화
 generate_uuid() {
-    if command -v uuidgen > /dev/null 2>&1; then
-        echo $(uuidgen | tr '[:upper:]' '[:lower:]')
-    elif [ -f /proc/sys/kernel/random/uuid ]; then
-        cat /proc/sys/kernel/random/uuid
+    # /dev/urandom 사용으로 성능 향상
+    cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 32 | head -n 1 | \
+    sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/'
+}
+
+# 단일 요청 함수
+send_request() {
+    local batch_id=$1
+    local request_num=$2
+    
+    SESSION_ID=$(generate_uuid)
+    REQUEST_ID=$(generate_uuid)
+    
+    response=$(curl -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"movieId\":\"movie-topgun2\",\"sessionId\":\"$SESSION_ID\",\"requestId\":\"$REQUEST_ID\"}" \
+        -w "HTTP_STATUS:%{http_code}" \
+        -s --max-time 5 \
+        https://dev.api.peacemaker.kr/api/admission/enter 2>/dev/null)
+    
+    http_status=$(echo "$response" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+    
+    # 간단한 로그 (성능상 최소화)
+    if [[ "$http_status" == "202" ]]; then
+        echo "[$batch_id-$request_num] 대기열 등록"
+    elif [[ "$http_status" == "200" ]]; then
+        echo "[$batch_id-$request_num] 즉시 입장"
     else
-        openssl rand -hex 16 | sed 's/\(..\)/\1-/g; s/.\{9\}/&-/; s/.\{14\}/&-/; s/.\{19\}/&-/; s/-$//'
+        echo "[$batch_id-$request_num] 오류: $http_status"
     fi
 }
 
-# 병렬 처리로 빠르게 대기열 상황 만들기
-call_api_batch() {
-    local batch_start=$1
-    local batch_end=$2
+# 배치 실행 함수
+run_batch() {
+    local batch_id=$1
+    local start_num=$(( (batch_id - 1) * BATCH_SIZE + 1 ))
+    local end_num=$(( batch_id * BATCH_SIZE ))
     
-    for i in $(seq $batch_start $batch_end); do
-        SESSION_ID=$(generate_uuid)
-        REQUEST_ID=$(generate_uuid)
+    for i in $(seq $start_num $end_num); do
+        send_request $batch_id $i &
         
-        response=$(curl -X POST \
-            -H "Content-Type: application/json" \
-            -d "{\"movieId\":\"movie-topgun2\",\"sessionId\":\"$SESSION_ID\",\"requestId\":\"$REQUEST_ID\"}" \
-            -w "HTTP_STATUS:%{http_code}" \
-            -s \
-            https://dev.api.peacemaker.kr/api/admission/enter)
-        
-        http_status=$(echo "$response" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
-        response_body=$(echo "$response" | sed 's/HTTP_STATUS:[0-9]*$//')
-        
-        # 대기열에 들어간 경우만 로그 출력
-        if [[ "$http_status" == "202" ]]; then
-            rank=$(echo "$response_body" | grep -o '"myRank":[0-9]*' | cut -d: -f2)
-            echo "[$i] 대기열 등록 - 순위: $rank"
-        elif [[ "$http_status" == "200" ]]; then
-            echo "[$i] 즉시 입장"
-        else
-            echo "[$i] 오류 - HTTP $http_status"
+        # 너무 많은 동시 연결 방지 (배치 내에서도 조절)
+        if (( i % 20 == 0 )); then
+            sleep 0.1
         fi
     done
+    
+    wait # 배치 내 모든 요청 대기
+    echo "배치 $batch_id 완료 (요청 $start_num-$end_num)"
 }
 
-# 배치 크기 설정 (동시에 처리할 요청 수)
-BATCH_SIZE=50
-total_batches=$(( (LOOP_COUNT + BATCH_SIZE - 1) / BATCH_SIZE ))
+# 메인 실행
+export -f generate_uuid send_request run_batch
 
-echo "�� 배치 처리: ${total_batches}개 배치 × ${BATCH_SIZE}명씩"
+# 전체 배치 수 계산
+total_batches=$(( TOTAL_REQUESTS / BATCH_SIZE ))
 
-for batch in $(seq 1 $total_batches); do
-    batch_start=$(( (batch - 1) * BATCH_SIZE + 1 ))
-    batch_end=$(( batch * BATCH_SIZE ))
-    
-    if [ $batch_end -gt $LOOP_COUNT ]; then
-        batch_end=$LOOP_COUNT
+echo "총 배치 수: $total_batches, 동시 실행: $CONCURRENT_BATCH"
+
+# 배치 단위로 병렬 실행
+for start_batch in $(seq 1 $CONCURRENT_BATCH $total_batches); do
+    end_batch=$(( start_batch + CONCURRENT_BATCH - 1 ))
+    if (( end_batch > total_batches )); then
+        end_batch=$total_batches
     fi
     
-    echo "🔄 배치 $batch/$total_batches 처리 중... ($batch_start-$batch_end)"
+    echo "🔄 배치 그룹 $start_batch-$end_batch 실행 중..."
     
-    # 백그라운드로 배치 실행
-    call_api_batch $batch_start $batch_end &
+    # CONCURRENT_BATCH 개씩 동시 실행
+    for batch_id in $(seq $start_batch $end_batch); do
+        run_batch $batch_id &
+    done
     
-    # 배치 간 짧은 대기 (서버 부하 방지)
+    wait # 현재 배치 그룹 완료 대기
+    echo "✅ 배치 그룹 $start_batch-$end_batch 완료"
+    
+    # 서버 부하 방지를 위한 짧은 대기
     sleep 1
 done
 
-# 모든 백그라운드 작업 완료 대기
-wait
-
-echo "========================================="
-echo "✅ 총 $LOOP_COUNT명 처리 완료"
-echo "💡 이제 웹에서 접속하면 대기열에 들어갈 것입니다!"
+echo "🎉 ${TOTAL_REQUESTS} 트래픽 테스트 완료!"
