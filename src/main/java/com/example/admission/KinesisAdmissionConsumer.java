@@ -1,5 +1,4 @@
-// KinesisAdmissionConsumer.java 전체 교체
-
+// src/main/java/com/example/admission/KinesisAdmissionConsumer.java
 package com.example.admission;
 
 import com.example.admission.ws.WebSocketUpdateService;
@@ -20,7 +19,6 @@ import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 public class KinesisAdmissionConsumer {
@@ -31,144 +29,69 @@ public class KinesisAdmissionConsumer {
     @Value("${KINESIS_STREAM_NAME:prod-cgv-admissions-stream}")
     private String streamName;
     
-    @Value("${admission.kinesis.region:ap-northeast-2}")
-    private String region;
-    
-    @Value("${KINESIS_POLL_INTERVAL:1000}") // 1초로 단축
-    private long pollInterval;
-    
-    @Value("${admission.kinesis.consumer.enabled:true}")
+    @Value("${KINESIS_CONSUMER_ENABLED:true}")
     private boolean consumerEnabled;
     
-    private KinesisClient kinesisClient;
+    private final KinesisClient kinesisClient;
     private ScheduledExecutorService consumerExecutor;
     private final WebSocketUpdateService webSocketService;
     private String shardIterator;
     private volatile boolean isRunning = false;
-    private final AtomicLong processedCount = new AtomicLong(0);
 
-    public KinesisAdmissionConsumer(WebSocketUpdateService webSocketService) {
+    public KinesisAdmissionConsumer(WebSocketUpdateService webSocketService, KinesisClient kinesisClient) {
         this.webSocketService = webSocketService;
+        this.kinesisClient = kinesisClient;
     }
 
     @PostConstruct
     public void init() {
         if (!consumerEnabled) {
-            logger.info("CONSUMER: Kinesis 컨슈머가 비활성화되어 있습니다.");
+            logger.info("Kinesis 컨슈머가 비활성화되어 있습니다.");
             return;
         }
-        
-        try {
-            this.kinesisClient = KinesisClient.builder()
-                    .region(Region.of(region))
-                    .build();
-            
-            this.consumerExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "KinesisConsumerThread");
-                t.setDaemon(true);
-                return t;
-            });
-            
-            logger.info("CONSUMER: Kinesis 컨슈머 초기화 완료 - 스트림: {}, 리전: {}, 폴링간격: {}ms", 
-                       streamName, region, pollInterval);
-            
-            startConsumer();
-            
-        } catch (Exception e) {
-            logger.error("CONSUMER: Kinesis 컨슈머 초기화 실패", e);
-        }
+        this.consumerExecutor = Executors.newSingleThreadScheduledExecutor();
+        startConsumer();
     }
 
     private void startConsumer() {
         try {
-            DescribeStreamRequest describeRequest = DescribeStreamRequest.builder()
-                    .streamName(streamName)
-                    .build();
-                    
+            DescribeStreamRequest describeRequest = DescribeStreamRequest.builder().streamName(streamName).build();
             DescribeStreamResponse describeResponse = kinesisClient.describeStream(describeRequest);
-            
-            if (describeResponse.streamDescription().shards().isEmpty()) {
-                logger.error("CONSUMER: 스트림에 샤드가 없습니다: {}", streamName);
-                return;
-            }
-            
             Shard shard = describeResponse.streamDescription().shards().get(0);
-            String shardId = shard.shardId();
             
-            // 중요: TRIM_HORIZON으로 변경하여 모든 메시지를 받도록 함
             GetShardIteratorRequest shardIteratorRequest = GetShardIteratorRequest.builder()
                     .streamName(streamName)
-                    .shardId(shardId)
-                    .shardIteratorType(ShardIteratorType.TRIM_HORIZON) // 처음부터 읽기
+                    .shardId(shard.shardId())
+                    .shardIteratorType(ShardIteratorType.LATEST) // 항상 최신 데이터부터 읽기 시작
                     .build();
-                    
-            GetShardIteratorResponse shardIteratorResponse = kinesisClient.getShardIterator(shardIteratorRequest);
-            this.shardIterator = shardIteratorResponse.shardIterator();
-            
-            logger.info("CONSUMER: 샤드 이터레이터 초기화 완료 - 샤드ID: {}", shardId);
+            this.shardIterator = kinesisClient.getShardIterator(shardIteratorRequest).shardIterator();
             
             this.isRunning = true;
-            consumerExecutor.scheduleWithFixedDelay(
-                this::pollRecords, 
-                0, 
-                pollInterval, 
-                TimeUnit.MILLISECONDS
-            );
-            
-            logger.info("CONSUMER: Kinesis 레코드 폴링 시작됨 ({}ms 간격)", pollInterval);
+            long pollInterval = 1000; // 1초
+            consumerExecutor.scheduleWithFixedDelay(this::pollRecords, 0, pollInterval, TimeUnit.MILLISECONDS);
+            logger.info("Kinesis 레코드 폴링 시작됨 ({}ms 간격)", pollInterval);
             
         } catch (Exception e) {
-            logger.error("CONSUMER: 컨슈머 시작 실패", e);
+            logger.error("Kinesis 컨슈머 시작 실패", e);
         }
     }
 
     private void pollRecords() {
-        if (!isRunning || shardIterator == null) {
-            logger.debug("CONSUMER: 폴링 건너뜀 - running: {}, shardIterator: {}", 
-                        isRunning, shardIterator != null ? "존재" : "null");
-            return;
-        }
-        
+        if (!isRunning || shardIterator == null) return;
         try {
-            GetRecordsRequest getRecordsRequest = GetRecordsRequest.builder()
-                    .shardIterator(shardIterator)
-                    .limit(100)
-                    .build();
-                    
+            GetRecordsRequest getRecordsRequest = GetRecordsRequest.builder().shardIterator(shardIterator).limit(100).build();
             GetRecordsResponse getRecordsResponse = kinesisClient.getRecords(getRecordsRequest);
             List<software.amazon.awssdk.services.kinesis.model.Record> records = getRecordsResponse.records();
             
             if (!records.isEmpty()) {
-                logger.info("CONSUMER: {}개의 Kinesis 레코드 수신됨", records.size());
-                
-                for (software.amazon.awssdk.services.kinesis.model.Record record : records) {
-                    processRecord(record);
-                }
-                
-                logger.info("CONSUMER: {}개의 레코드 처리 완료", records.size());
-            } else {
-                logger.debug("CONSUMER: 수신된 레코드 없음");
+                records.forEach(this::processRecord);
             }
-            
-            // 다음 폴링을 위해 이터레이터 업데이트
             this.shardIterator = getRecordsResponse.nextShardIterator();
-            
-            if (shardIterator == null) {
-                logger.warn("CONSUMER: 샤드 이터레이터가 null입니다. 재초기화 필요");
-                // 재초기화 시도
-                startConsumer();
-            }
-            
+        } catch (ResourceNotFoundException e) {
+             logger.error("Kinesis 스트림을 찾을 수 없습니다: {}", streamName, e);
+             this.isRunning = false; // 스트림이 없으면 중지
         } catch (Exception e) {
-            logger.error("CONSUMER: 레코드 폴링 중 오류 발생", e);
-            
-            // 오류 발생 시 잠시 대기 후 재시도
-            try {
-                Thread.sleep(2000);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                isRunning = false;
-            }
+            logger.error("레코드 폴링 중 오류 발생, 재시도합니다.", e);
         }
     }
 
@@ -178,71 +101,31 @@ public class KinesisAdmissionConsumer {
             JsonNode eventNode = objectMapper.readTree(data);
             String eventType = eventNode.path("action").asText();
             
-            // ⭐⭐⭐ [핵심 수정] Kinesis 이벤트를 받아서 WebSocket 알림을 보냄 ⭐⭐⭐
-            if ("ADMIT".equals(eventType)) {
-                String requestId = eventNode.path("requestId").asText();
-                String movieId = eventNode.path("movieId").asText();
-                
-                if (requestId != null && !requestId.isEmpty() && movieId != null && !movieId.isEmpty()) {
-                    logger.info("CONSUMER: 입장 허가 이벤트 수신. WebSocket 알림 전송... requestId: {}", requestId.substring(0, 8));
-                    webSocketService.notifyAdmission(requestId, movieId);
-                } else {
-                    logger.warn("CONSUMER: 필수 정보(requestId, movieId)가 누락된 ADMIT 이벤트 수신: {}", data);
-                }
-            } 
-            else {
-                logger.warn("CONSUMER: 알 수 없는 이벤트 타입: {}", eventType);
+            // ⭐ [핵심] 모든 이벤트 타입을 처리하도록 수정
+            switch (eventType) {
+                case "ADMIT":
+                    webSocketService.notifyAdmission(eventNode.path("requestId").asText(), eventNode.path("movieId").asText());
+                    break;
+                case "RANK_UPDATE":
+                    webSocketService.notifyRankUpdate(eventNode.path("requestId").asText(), "WAITING", eventNode.path("rank").asLong(), eventNode.path("totalWaiting").asLong());
+                    break;
+                case "STATS_UPDATE":
+                    webSocketService.broadcastQueueStats(eventNode.path("movieId").asText(), eventNode.path("totalWaiting").asLong());
+                    break;
+                default:
+                    logger.warn("알 수 없는 Kinesis 이벤트 타입 수신: {}", eventType);
+                    break;
             }
         } catch (Exception e) {
-            logger.error("CONSUMER: 레코드 처리 실패 | 시퀀스번호: {}", record.sequenceNumber(), e);
+            logger.error("Kinesis 레코드 처리 실패", e);
         }
-    }
-
-    public boolean isRunning() {
-        return isRunning;
-    }
-    
-    public boolean isEnabled() {
-        return consumerEnabled;
-    }
-    
-    public String getStreamName() {
-        return streamName;
-    }
-    
-    public long getProcessedCount() {
-        return processedCount.get();
     }
 
     @PreDestroy
     public void shutdown() {
-        logger.info("CONSUMER: Kinesis 컨슈머 종료 시작...");
-        
         this.isRunning = false;
-        
         if (consumerExecutor != null) {
             consumerExecutor.shutdown();
-            try {
-                if (!consumerExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
-                    logger.warn("CONSUMER: 정상 종료 시간 초과, 강제 종료 실행");
-                    consumerExecutor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                logger.warn("CONSUMER: 종료 대기 중 인터럽트 발생, 강제 종료 실행");
-                consumerExecutor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
         }
-        
-        if (kinesisClient != null) {
-            try {
-                kinesisClient.close();
-                logger.info("CONSUMER: Kinesis 클라이언트 종료 완료");
-            } catch (Exception e) {
-                logger.error("CONSUMER: Kinesis 클라이언트 종료 중 오류", e);
-            }
-        }
-        
-        logger.info("CONSUMER: Kinesis 컨슈머 종료 완료 - 총 처리: {}건", processedCount.get());
     }
 }
