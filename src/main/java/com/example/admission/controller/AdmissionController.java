@@ -12,7 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
+import org.springframework.beans.factory.annotation.Value;
 import java.util.Map;
 
 @RestController
@@ -29,6 +29,9 @@ public class AdmissionController {
         this.admissionService = admissionService;
         this.sessionCalculator = sessionCalculator;
     }
+    @Value("${SESSION_TIMEOUT_SECONDS:30}")
+    private long sessionTimeoutSeconds;
+
 
     @Operation(summary = "대기열 진입", description = "영화 예매 대기열에 진입합니다")
     @PostMapping("/enter")
@@ -73,7 +76,7 @@ public class AdmissionController {
                 "waitTimePerPodSeconds", 10, // 파드당 대기 시간 (10초)
                 "currentPodCount", sessionInfo.currentPodCount(),
                 "maxTotalSessions", sessionInfo.calculatedMaxSessions(),
-                "sessionTimeoutSeconds", 30, // 세션 타임아웃
+                "sessionTimeoutSeconds", sessionTimeoutSeconds, // 동적 값으로 변경!
                 "dynamicScalingEnabled", sessionInfo.dynamicScalingEnabled(),
                 "kubernetesAvailable", sessionInfo.kubernetesAvailable()
             );
