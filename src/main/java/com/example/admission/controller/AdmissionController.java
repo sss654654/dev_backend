@@ -29,7 +29,7 @@ public class AdmissionController {
         this.admissionService = admissionService;
         this.sessionCalculator = sessionCalculator;
     }
-    @Value("${SESSION_TIMEOUT_SECONDS:30}")
+    @Value("${SESSION_TIMEOUT_SECONDS}")
     private long sessionTimeoutSeconds;
 
 
