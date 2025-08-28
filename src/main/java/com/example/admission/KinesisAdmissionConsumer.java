@@ -1,9 +1,7 @@
-// ===============================================
-// 🔥 1. KinesisAdmissionConsumer 완전 리팩토링
-// ===============================================
 package com.example.admission;
 
 import com.example.admission.ws.WebSocketUpdateService;
+import com.example.admission.service.LoadBalancingOptimizer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -16,12 +14,12 @@ import software.amazon.awssdk.services.kinesis.model.*;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Component
 public class KinesisAdmissionConsumer {
@@ -35,46 +33,99 @@ public class KinesisAdmissionConsumer {
     @Value("${KINESIS_CONSUMER_ENABLED:true}")
     private boolean consumerEnabled;
     
-    // ⭐ 핵심 수정 1: 멀티 샤드 지원을 위한 구조 변경
+    // Pod별 샤드 분산을 위한 구조
     private final Map<String, ScheduledExecutorService> shardConsumers = new ConcurrentHashMap<>();
     private final Map<String, String> shardIterators = new ConcurrentHashMap<>();
     
     private final KinesisClient kinesisClient;
     private final WebSocketUpdateService webSocketService;
+    private final LoadBalancingOptimizer loadBalancingOptimizer;
     private volatile boolean isRunning = false;
 
-    public KinesisAdmissionConsumer(WebSocketUpdateService webSocketService, KinesisClient kinesisClient) {
+    public KinesisAdmissionConsumer(WebSocketUpdateService webSocketService, 
+                                   KinesisClient kinesisClient,
+                                   LoadBalancingOptimizer loadBalancingOptimizer) {
         this.webSocketService = webSocketService;
         this.kinesisClient = kinesisClient;
+        this.loadBalancingOptimizer = loadBalancingOptimizer;
     }
 
     @PostConstruct
     public void init() {
         if (!consumerEnabled) {
-            logger.info("🚫 Kinesis 컨슈머가 비활성화되어 있습니다.");
+            logger.info("Kinesis 컨슈머가 비활성화되어 있습니다.");
             return;
         }
         this.isRunning = true;
-        startAllShardConsumers();
+        startAssignedShardConsumers();
     }
 
-    // ⭐ 핵심 수정 2: 모든 샤드를 별도 스레드로 처리
-    private void startAllShardConsumers() {
+    /**
+     * 핵심 수정: Pod별로 담당 샤드만 처리하도록 분산
+     */
+    private void startAssignedShardConsumers() {
         try {
+            // 전체 샤드 조회
             DescribeStreamRequest describeRequest = DescribeStreamRequest.builder()
                 .streamName(streamName)
                 .build();
             DescribeStreamResponse response = kinesisClient.describeStream(describeRequest);
             
-            List<Shard> shards = response.streamDescription().shards();
-            logger.info("🔍 발견된 샤드 수: {}", shards.size());
+            List<Shard> allShards = response.streamDescription().shards();
+            logger.info("전체 샤드 수: {}", allShards.size());
             
-            for (Shard shard : shards) {
+            // 이 Pod이 담당할 샤드들만 선별
+            List<Shard> myShards = assignShardsToThisPod(allShards);
+            logger.info("이 Pod({})이 담당할 샤드: {} (총 {}개)", 
+                       loadBalancingOptimizer.getPodId(), 
+                       myShards.stream().map(Shard::shardId).collect(Collectors.toList()),
+                       myShards.size());
+            
+            // 담당 샤드에 대해서만 Consumer 시작
+            for (Shard shard : myShards) {
                 startConsumerForShard(shard);
             }
             
         } catch (Exception e) {
-            logger.error("❌ 샤드 Consumer 시작 실패", e);
+            logger.error("샤드 Consumer 시작 실패", e);
+        }
+    }
+
+    /**
+     * Pod ID 기반으로 이 Pod이 담당할 샤드들을 분산 배정
+     */
+    private List<Shard> assignShardsToThisPod(List<Shard> allShards) {
+        try {
+            // LoadBalancingOptimizer에서 활성 Pod 목록 가져오기
+            List<String> activePods = loadBalancingOptimizer.getLoadBalancingStatus()
+                .get("activePods") instanceof List ? 
+                (List<String>) loadBalancingOptimizer.getLoadBalancingStatus().get("activePods") : 
+                Arrays.asList(loadBalancingOptimizer.getPodId());
+            
+            String myPodId = loadBalancingOptimizer.getPodId();
+            int myIndex = activePods.indexOf(myPodId);
+            
+            if (myIndex == -1) {
+                logger.warn("현재 Pod이 활성 목록에 없음, 첫 번째 샤드만 처리");
+                return allShards.isEmpty() ? Collections.emptyList() : 
+                       Collections.singletonList(allShards.get(0));
+            }
+            
+            // Round Robin 방식으로 샤드 분산
+            List<Shard> myShards = new ArrayList<>();
+            for (int i = myIndex; i < allShards.size(); i += activePods.size()) {
+                myShards.add(allShards.get(i));
+            }
+            
+            logger.info("샤드 분산 결과: 전체 Pod {}개, 내 순서 {}, 담당 샤드 {}개", 
+                       activePods.size(), myIndex, myShards.size());
+            
+            return myShards;
+            
+        } catch (Exception e) {
+            logger.error("샤드 분산 실패, 첫 번째 샤드만 처리", e);
+            return allShards.isEmpty() ? Collections.emptyList() : 
+                   Collections.singletonList(allShards.get(0));
         }
     }
 
@@ -97,19 +148,18 @@ public class KinesisAdmissionConsumer {
                 new Thread(r, "kinesis-consumer-" + shardId));
             shardConsumers.put(shardId, executor);
             
-            // ⭐ 핵심 수정 3: 250ms 간격으로 변경 (초당 4회 = 안전 범위)
-            long pollInterval = 250;
+            // 500ms 간격으로 폴링 (안전한 간격)
+            long pollInterval = 500;
             executor.scheduleWithFixedDelay(() -> pollRecordsForShard(shardId), 
                 0, pollInterval, TimeUnit.MILLISECONDS);
                 
-            logger.info("✅ 샤드 Consumer 시작: {} ({}ms 간격)", shardId, pollInterval);
+            logger.info("샤드 Consumer 시작: {} ({}ms 간격)", shardId, pollInterval);
             
         } catch (Exception e) {
-            logger.error("❌ 샤드 {} Consumer 시작 실패", shardId, e);
+            logger.error("샤드 {} Consumer 시작 실패", shardId, e);
         }
     }
 
-    // ⭐ 핵심 수정 4: 샤드별 독립적 폴링 + 재시도 로직
     private void pollRecordsForShard(String shardId) {
         if (!isRunning) return;
         
@@ -123,14 +173,14 @@ public class KinesisAdmissionConsumer {
             try {
                 GetRecordsRequest request = GetRecordsRequest.builder()
                     .shardIterator(iterator)
-                    .limit(25) // 샤드당 적은 양으로 분산 처리
+                    .limit(50) // 샤드당 적절한 양
                     .build();
                     
                 GetRecordsResponse response = kinesisClient.getRecords(request);
                 
                 if (!response.records().isEmpty()) {
                     response.records().forEach(this::processRecord);
-                    logger.debug("📥 샤드 {} - {}건 처리", shardId, response.records().size());
+                    logger.debug("샤드 {} - {}건 처리", shardId, response.records().size());
                 }
                 
                 // Iterator 업데이트
@@ -139,8 +189,8 @@ public class KinesisAdmissionConsumer {
                 
             } catch (ProvisionedThroughputExceededException e) {
                 retryCount++;
-                long waitTime = Math.min(1000 * retryCount, 5000); // 최대 5초
-                logger.warn("⚠️ 샤드 {} 처리량 초과, {}ms 대기 후 재시도 {}/{}", 
+                long waitTime = Math.min(1000L * retryCount, 5000L); // 최대 5초
+                logger.warn("샤드 {} 처리량 초과, {}ms 대기 후 재시도 {}/{}", 
                            shardId, waitTime, retryCount, maxRetries);
                 try {
                     Thread.sleep(waitTime);
@@ -150,19 +200,19 @@ public class KinesisAdmissionConsumer {
                 }
                 
             } catch (ResourceNotFoundException e) {
-                logger.error("❌ Kinesis 스트림을 찾을 수 없음: {}", streamName, e);
+                logger.error("Kinesis 스트림을 찾을 수 없음: {}", streamName, e);
                 this.isRunning = false;
                 return;
                 
             } catch (Exception e) {
                 retryCount++;
                 if (retryCount >= maxRetries) {
-                    logger.error("❌ 샤드 {} 폴링 최종 실패", shardId, e);
+                    logger.error("샤드 {} 폴링 최종 실패", shardId, e);
                     return;
                 }
-                logger.warn("⚠️ 샤드 {} 폴링 오류, 재시도 {}/{}", shardId, retryCount, maxRetries, e);
+                logger.warn("샤드 {} 폴링 오류, 재시도 {}/{}", shardId, retryCount, maxRetries, e);
                 try {
-                    Thread.sleep(200 * retryCount);
+                    Thread.sleep(200L * retryCount);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
@@ -196,24 +246,24 @@ public class KinesisAdmissionConsumer {
                         eventNode.path("totalWaiting").asLong());
                     break;
                 default:
-                    logger.debug("🤷 알 수 없는 이벤트 타입: {}", eventType);
+                    logger.debug("알 수 없는 이벤트 타입: {}", eventType);
                     break;
             }
         } catch (Exception e) {
-            logger.error("❌ Kinesis 레코드 처리 실패", e);
+            logger.error("Kinesis 레코드 처리 실패", e);
         }
     }
 
     @PreDestroy
     public void shutdown() {
-        logger.info("🛑 Kinesis Consumer 종료 시작...");
+        logger.info("Kinesis Consumer 종료 시작...");
         this.isRunning = false;
         
         shardConsumers.values().forEach(executor -> {
             executor.shutdown();
             try {
                 if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                    logger.warn("⏰ Executor 정상 종료 실패, 강제 종료 중...");
+                    logger.warn("Executor 정상 종료 실패, 강제 종료 중...");
                     executor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -224,7 +274,7 @@ public class KinesisAdmissionConsumer {
         
         shardConsumers.clear();
         shardIterators.clear();
-        logger.info("✅ Kinesis Consumer 종료 완료");
+        logger.info("Kinesis Consumer 종료 완료");
     }
     
     // 모니터링을 위한 상태 조회 메서드
@@ -232,7 +282,8 @@ public class KinesisAdmissionConsumer {
         return Map.of(
             "isRunning", isRunning,
             "activeShardConsumers", shardConsumers.size(),
-            "shardIds", shardIterators.keySet()
+            "shardIds", shardIterators.keySet(),
+            "podId", loadBalancingOptimizer.getPodId()
         );
     }
 }
