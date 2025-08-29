@@ -19,8 +19,8 @@ public class QueueProcessor {
     private static final Logger logger = LoggerFactory.getLogger(QueueProcessor.class);
     
     // 🔥 부하 상황 대응 설정
-    private static final int PROCESSING_BATCH_SIZE = 500;
-    private static final long PROCESSING_INTERVAL = 500;
+    private static final int PROCESSING_BATCH_SIZE = 100;
+    private static final long PROCESSING_INTERVAL = 2000;
     private static final int MAX_WEBSOCKET_RETRIES = 2;
     
     private final AdmissionService admissionService;
