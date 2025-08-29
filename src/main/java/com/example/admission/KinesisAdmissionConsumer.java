@@ -149,7 +149,7 @@ public class KinesisAdmissionConsumer {
             shardConsumers.put(shardId, executor);
             
             // 500ms 간격으로 폴링 (안전한 간격)
-            long pollInterval = 500;
+            long pollInterval = 1000;
             executor.scheduleWithFixedDelay(() -> pollRecordsForShard(shardId), 
                 0, pollInterval, TimeUnit.MILLISECONDS);
                 
