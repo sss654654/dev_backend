@@ -1,69 +1,6 @@
-
-# version: '3.8'
-
-# services:
-#   # MySQL 데이터베이스 서비스
-#   mysql:
-#     image: mysql:8.0
-#     container_name: mysql
-#     environment:
-#       MYSQL_ROOT_PASSWORD: rootpassword
-#       MYSQL_DATABASE: cgv
-#       MYSQL_USER: cgv_user
-#       MYSQL_PASSWORD: cgv_password
-#     ports:
-#       - "3307:3306"
-#     volumes:
-#       - mysql_data_dev:/var/lib/mysql
-#       - ./src/main/resources/data.sql:/docker-entrypoint-initdb.d/data.sql
-#     networks:
-#       - cgv-network
-#     healthcheck:
-#       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-#       timeout: 20s
-#       retries: 10
-
-#   # Redis 서비스
-#   redis:
-#     image: redis:7-alpine
-#     container_name: redis
-#     ports:
-#       - "6379:6379"
-#     networks:
-#       - cgv-network
-
-#   # Spring Boot 백엔드 애플리케이션 서비스
-#   api:
-#     build: .
-#     container_name: api
-#     env_file:
-#       - ./.env
-#     ports:
-#       - "8080:8080"
-#     volumes:
-#       # AWS 자격 증명 연동을 위한 볼륨
-#       - ~/.aws:/root/.aws:ro
-#       # 실시간 코드 업데이트를 위한 볼륨
-#       - ./target/classes:/app/BOOT-INF/classes
-#     depends_on:
-#       mysql:
-#         condition: service_healthy
-#       redis:
-#         condition: service_started
-#     networks:
-#       - cgv-network
-#     restart: unless-stopped
-
-# volumes:
-#   mysql_data_dev:
-
-# networks:
-#   cgv-network:
-#     driver: bridge
-    
 version: '3.8'
+
 services:
-  # MySQL 데이터베이스 서비스
   mysql:
     image: mysql:8.0
     container_name: mysql
@@ -84,8 +21,6 @@ services:
       timeout: 20s
       retries: 10
 
-
-  # Redis 서비스
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -94,27 +29,20 @@ services:
     networks:
       - cgv-network
 
-  # [추가] LocalStack 서비스 (로컬 AWS 환경)
   localstack:
     image: localstack/localstack:latest
     container_name: localstack
     ports:
-      - "4566:4566"      # AWS 서비스 엔드포인트
+      - "4566:4566"
     environment:
-      # 필요한 서비스만 활성화하여 리소스 절약
       - SERVICES=kinesis,sts
-      # ✅ 아래 DOCKER_HOST 설정을 추가하면 스크립트가 컨테이너 내부에서 docker 명령을 사용할 수 있게 됩니다.
       - DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
-      # LocalStack 데이터를 유지하여 재시작 시 상태 보존
       - localstack_data_dev:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
-      # ✅ 아래 볼륨을 추가하여 초기화 스크립트를 컨테이너에 복사하고 실행시킵니다.
       - ./init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh
     networks:
       - cgv-network
-
-  # Spring Boot 백엔드 애플리케이션 서비스
 
   api:
     build: .
@@ -123,27 +51,23 @@ services:
       - ./.env
     ports:
       - "8080:8080"
-      # ✅ 아래 environment 섹션을 추가하세요.
     environment:
       - SPRING_PROFILES_ACTIVE=local
     volumes:
-     # - ~/.aws:/root/.aws:ro
       - ./target/classes:/app/BOOT-INF/classes
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_started
-      # [추가] api 서비스가 시작되기 전에 localstack이 먼저 실행되도록 의존성 추가d.
       localstack:
-
         condition: service_started
     networks:
       - cgv-network
     restart: unless-stopped
+
 volumes:
   mysql_data_dev:
-  # [추가] LocalStack 데이터 유지를 위한 볼륨 정의
   localstack_data_dev:
 
 networks:
